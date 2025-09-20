@@ -46,7 +46,7 @@ interface ChartNode {
     id: string;
     payload: OrgChartDatum | null;
     children: ChartNode[];
-    totalChildCount: number;
+    totalChildCount: number; // direct children count
 }
 
 interface RenderNode {
@@ -102,7 +102,7 @@ export class Visual implements IVisual {
 
     private root: HTMLDivElement;
 
-    // Compact rail-only toolbar
+    // Dense rail-only toolbar
     private toolbar: HTMLDivElement;
     private toolbarRail: HTMLDivElement;
     private toolbarToggle: HTMLButtonElement;
@@ -133,6 +133,10 @@ export class Visual implements IVisual {
 
     private emptyState: HTMLDivElement;
 
+    // init flags
+    private didInitialAutoCollapse = false;
+    private didInitialFit = false;
+
     constructor(options: VisualConstructorOptions) {
         this.host = options.host;
         this.selectionManager = this.host.createSelectionManager();
@@ -142,7 +146,7 @@ export class Visual implements IVisual {
         this.root.className = "orgchart-visual";
         this.root.dataset.toolbarVisible = "1";
 
-        // ===== Toolbar (compact rail only) =====
+        // ===== Toolbar (dense) =====
         this.toolbar = document.createElement("div");
         this.toolbar.className = "orgchart__toolbar";
         this.root.appendChild(this.toolbar);
@@ -150,11 +154,12 @@ export class Visual implements IVisual {
         this.toolbarRail = document.createElement("div");
         this.toolbarRail.className = "orgchart__toolbar-rail";
         Object.assign(this.toolbarRail.style, {
-            width: "36px",
-            padding: "4px 3px",
-            borderRadius: "14px",
-            boxShadow: "0 6px 16px rgba(15,23,42,0.10)",
-            backdropFilter: "blur(6px)",
+            width: "30px",
+            padding: "2px",
+            borderRadius: "12px",
+            boxShadow: "0 4px 12px rgba(15,23,42,0.10)",
+            backdropFilter: "blur(4px)",
+            lineHeight: "0"
         } as CSSStyleDeclaration);
         this.toolbar.appendChild(this.toolbarRail);
 
@@ -212,41 +217,51 @@ export class Visual implements IVisual {
         this.fullTree = transformResult.tree;
         this.nodesById = transformResult.nodesById;
         this.pruneCollapsedNodes();
-        this.updateHighlights(dataView);
 
+        // Default: only levels 1 & 2 expanded (parents at depth==2 collapsed)
+        if (this.fullTree && (!this.didInitialAutoCollapse || this.collapsedNodes.size === 0)) {
+            this.collapsedNodes = this.computeDefaultCollapsedSet(2);
+            this.didInitialAutoCollapse = true;
+        }
+
+        this.updateHighlights(dataView);
         this.render();
+
+        if (!this.didInitialFit) {
+            this.fitToViewport(0);
+            this.didInitialFit = true;
+        }
     }
 
     public getFormattingModel(): powerbi.visuals.FormattingModel {
         return this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
     }
 
-    // ================= Toolbar (rail-only, compact) =================
+    // ================= Toolbar (rail-only, dense) =================
 
     private buildToolbar(): void {
         if (!this.toolbarRail) return;
-
         while (this.toolbarRail.firstChild) this.toolbarRail.removeChild(this.toolbarRail.firstChild);
 
-        // Always-visible toggle (28px)
+        // Toggle
         this.toolbarToggle = this.createToolbarRailButton("menu", "Show/Hide controls", () => {
             this.controlsVisible = !this.controlsVisible;
             this.updateToolbarRailState();
-        });
+        }, 24, 1);
         this.toolbarToggle.classList.add("orgchart__toolbar-btn--toggle");
         this.toolbarRail.appendChild(this.toolbarToggle);
 
-        // Action buttons (compact)
+        // Actions
         const buttons: Array<{ title: string; icon: ToolbarIcon; onClick: () => void; }> = [
             { title: "Toggle vertical / horizontal", icon: "layout", onClick: () => this.toggleOrientation() },
             { title: "Expand all nodes", icon: "expand", onClick: () => this.expandAll() },
             { title: "Collapse to root", icon: "collapse", onClick: () => this.collapseAll() },
-            { title: "Fit to view", icon: "fit", onClick: () => this.fitToViewport() },
+            { title: "Fit to view", icon: "fit", onClick: () => this.fitToViewport(100) },
             { title: "Reset zoom/pan", icon: "reset", onClick: () => this.resetZoom() }
         ];
 
         buttons.forEach((config) => {
-            const btn = this.createToolbarRailButton(config.icon, config.title, config.onClick);
+            const btn = this.createToolbarRailButton(config.icon, config.title, config.onClick, 24, 1);
             btn.classList.add("orgchart__toolbar-btn--action");
             this.toolbarRail.appendChild(btn);
         });
@@ -268,19 +283,24 @@ export class Visual implements IVisual {
         if (this.root) this.root.dataset.toolbarMenu = this.controlsVisible ? "1" : "0";
     }
 
-    private createToolbarRailButton(icon: ToolbarIcon, title: string, onClick: () => void): HTMLButtonElement {
+    private createToolbarRailButton(
+        icon: ToolbarIcon,
+        title: string,
+        onClick: () => void,
+        size: number = 24,
+        margin: number = 1
+    ): HTMLButtonElement {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "orgchart__toolbar-btn";
         button.title = title;
         button.setAttribute("aria-label", title);
 
-        // Compact sizing + narrower gaps
         Object.assign(button.style, {
-            width: "28px",
-            height: "28px",
-            borderRadius: "9px",
-            margin: "2px",
+            width: `${size}px`,
+            height: `${size}px`,
+            borderRadius: "8px",
+            margin: `${margin}px`,
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
@@ -289,8 +309,9 @@ export class Visual implements IVisual {
 
         const iconElement = this.createToolbarIcon(icon);
         iconElement.classList.add("orgchart__toolbar-icon");
-        iconElement.setAttribute("width", "18");
-        iconElement.setAttribute("height", "18");
+        const iconSize = Math.max(14, size - 6);
+        iconElement.setAttribute("width", `${iconSize}`);
+        iconElement.setAttribute("height", `${iconSize}`);
         button.appendChild(iconElement);
 
         button.addEventListener("click", (event) => {
@@ -310,7 +331,7 @@ export class Visual implements IVisual {
 
         const applyStroke = <T extends SVGElement>(element: T): T => {
             element.setAttribute("stroke", "currentColor");
-            element.setAttribute("stroke-width", "1.6");
+            element.setAttribute("stroke-width", "1.4");
             element.setAttribute("stroke-linecap", "round");
             element.setAttribute("stroke-linejoin", "round");
             return element;
@@ -391,7 +412,7 @@ export class Visual implements IVisual {
         const nameSize = this.clampNumber(labels.nameTextSize.value, 8, 32, 16);
         const titleSize = this.clampNumber(labels.titleTextSize.value, 8, 28, 12);
         const detailSize = this.clampNumber(labels.detailTextSize.value, 6, 24, 11);
-        const linkWidth = this.clampNumber(links.linkWidth.value, 0.5, 6, 1.6);
+        const linkWidth = this.clampNumber(links.linkWidth.value, 0.5, 6, 1.4);
         const linkOpacity = this.clampNumber(links.linkOpacity.value, 0.1, 1, 0.9);
         const borderWidth = this.clampNumber(card.borderWidth.value, 0, 8, 1);
         const borderRadius = this.clampNumber(card.borderRadius.value, 0, 50, 18);
@@ -414,11 +435,9 @@ export class Visual implements IVisual {
         this.root.dataset.cardAlign = alignment;
         this.root.style.setProperty("--org-show-images", card.showImage.value ? "1" : "0");
 
-        // Toolbar visibility
         this.toolbar.style.display = this.showToolbar ? "block" : "none";
         this.root.dataset.toolbarVisible = this.showToolbar ? "1" : "0";
 
-        // Zoom enable/disable
         if (this.allowZoom) {
             this.svg.call(this.zoomBehavior);
         } else {
@@ -535,7 +554,7 @@ export class Visual implements IVisual {
         });
 
         const assignTotals = (node: ChartNode): void => {
-            node.totalChildCount = node.children.length;
+            node.totalChildCount = node.children.length; // direct children
             node.children.forEach(assignTotals);
         };
         assignTotals(virtualRoot);
@@ -555,17 +574,16 @@ export class Visual implements IVisual {
         });
     }
 
-    private buildVisibleTree(): ChartNode | null {
-        if (!this.fullTree) return null;
-
-        const cloneNode = (node: ChartNode): ChartNode => {
-            const payloadId = node.payload?.id;
-            const isCollapsed = payloadId ? this.collapsedNodes.has(payloadId) : false;
-            const children = isCollapsed ? [] : node.children.map((child) => cloneNode(child));
-            return { id: node.id, payload: node.payload, children, totalChildCount: node.totalChildCount };
-        };
-
-        return cloneNode(this.fullTree);
+    // Collapse parents at depth == maxVisibleDepth
+    private computeDefaultCollapsedSet(maxVisibleDepth: number): Set<string> {
+        const set = new Set<string>();
+        if (!this.fullTree) return set;
+        const h = d3.hierarchy<ChartNode>(this.fullTree, (n) => n.children);
+        h.each((d) => {
+            // depth: 0 virtual root, 1 level-1, 2 level-2
+            if (d.depth === maxVisibleDepth && d.data.payload) set.add(d.data.payload.id);
+        });
+        return set;
     }
 
     // ================= Render =================
@@ -644,7 +662,7 @@ export class Visual implements IVisual {
         const linkData: RenderLink[] = [];
         layoutRoot.links().forEach((link) => {
             const sp = link.source.data.payload, tp = link.target.data.payload;
-            if (!sp || !tp) return;
+            if (!sp || !tp) return; // skip virtual root
             const s = nodeMap.get(sp.id), t = nodeMap.get(tp.id);
             if (s && t) linkData.push({ source: s, target: t, key: `${s.payload.id}-${t.payload.id}` });
         });
@@ -672,12 +690,26 @@ export class Visual implements IVisual {
         const nodeSelection = this.nodesGroup.selectAll<SVGGElement, RenderNode>("g.orgchart__node")
             .data(renderNodes, (d: RenderNode) => d.payload.id);
 
+        // ENTER — prevent paint until fully placed to avoid “top-left pop”
         const nodeEnter = nodeSelection.enter()
             .append("g")
             .attr("class", "orgchart__node")
-            .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
-            .style("visibility", "hidden") // prevent 0,0 flicker on first paint
+            .style("display", "none") // key: no intermediate frame
             .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
+
+        // seed new nodes at their parent's connector position (if known)
+        nodeEnter.attr("transform", (d) => {
+            const parentId = d.node.parent?.data.payload?.id;
+            if (parentId) {
+                const p = this.nodePositions.get(parentId);
+                if (p) {
+                    const px = this.orientation === "vertical" ? p.centerX - d.width / 2 : p.x + p.width;
+                    const py = this.orientation === "vertical" ? p.y + p.height : p.centerY - d.height / 2;
+                    return `translate(${px}, ${py})`;
+                }
+            }
+            return `translate(${d.x}, ${d.y})`;
+        });
 
         // card bg
         nodeEnter.append("rect")
@@ -687,7 +719,7 @@ export class Visual implements IVisual {
             .attr("rx", this.clampNumber(this.formattingSettings.card.borderRadius.value, 0, 50, 18))
             .attr("ry", this.clampNumber(this.formattingSettings.card.borderRadius.value, 0, 50, 18));
 
-        // card content in foreignObject
+        // card content
         nodeEnter.each((d, index, groups) => {
             const group = groups[index];
             const foreignObject = d3.select(group)
@@ -710,34 +742,39 @@ export class Visual implements IVisual {
             card.append("div").attr("class", "orgcard__metrics");
         });
 
-        // SVG toggle at connector origin
-        nodeEnter.append("g")
+        // toggle & child-count block near connector origin
+        const toggleEnter = nodeEnter.append("g")
             .attr("class", "orgchart__node-toggle")
             .style("cursor", "pointer")
             .on("click", (event, d) => {
                 event.preventDefault();
                 event.stopPropagation();
-                if (d.hasChildren) this.toggleNodeCollapse(d.payload.id);
-            })
-            .each((d, i, groups) => {
-                const g = d3.select(groups[i]);
-                g.append("circle")
-                    .attr("r", 9)
-                    .attr("class", "orgchart__node-toggle-bg")
-                    .style("pointer-events", "all");
-                g.append("line").attr("class", "orgchart__toggle-line-h").style("pointer-events", "none");
-                g.append("line").attr("class", "orgchart__toggle-line-v").style("pointer-events", "none");
+                if (d.hasChildren) this.toggleNodeCollapseAnchoredOneLevel(d.payload.id);
             });
 
-        // Update visuals
+        toggleEnter.append("text")
+            .attr("class", "orgchart__child-count")
+            .attr("text-anchor", "middle")
+            .attr("dy", "-12")
+            .style("font-size", "11px")
+            .style("fill", "var(--org-link-color)");
+
+        toggleEnter.append("circle")
+            .attr("r", 8)
+            .attr("class", "orgchart__node-toggle-bg")
+            .style("pointer-events", "all");
+
+        toggleEnter.append("line").attr("class", "orgchart__toggle-line-h").style("pointer-events", "none");
+        toggleEnter.append("line").attr("class", "orgchart__toggle-line-v").style("pointer-events", "none");
+
+        // UPDATE (shared)
         this.updateNodeContent(nodeSelection.merge(nodeEnter));
         this.updateNodeToggles(nodeSelection.merge(nodeEnter));
 
-        // Finalize nodes (show them now to avoid flicker)
-        nodeEnter.style("visibility", "visible");
-
+        // Final placement + show (no animation -> no flicker)
         nodeSelection.merge(nodeEnter)
             .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+            .style("display", "inline")
             .classed("has-children", (d) => d.hasChildren)
             .classed("is-collapsed", (d) => d.isCollapsed)
             .classed("is-highlighted", (d) => !!d.payload.highlight)
@@ -831,48 +868,50 @@ export class Visual implements IVisual {
         });
     }
 
-    // Position + draw toggle glyphs relative to card and orientation
+    // Position + glyphs + direct child count for toggle
     private updateNodeToggles(selection: d3.Selection<SVGGElement, RenderNode, any, unknown>): void {
         selection.each((d, i, groups) => {
             const g = d3.select(groups[i]).select<SVGGElement>("g.orgchart__node-toggle");
             if (g.empty()) return;
 
-            // Hide toggle if no children
+            const chartNode = this.nodesById.get(d.payload.id);
+            const directCount = chartNode ? chartNode.totalChildCount : 0;
+
             g.style("display", d.hasChildren ? "inline" : "none");
 
-            // Position at connector origin
+            // anchor position at connector origin
             let tx = 0, ty = 0;
-            if (this.orientation === "vertical") {
-                tx = d.width / 2;
-                ty = d.height + 4;
-            } else {
-                tx = d.width + 4;
-                ty = d.height / 2;
-            }
+            if (this.orientation === "vertical") { tx = d.width / 2; ty = d.height + 4; }
+            else { tx = d.width + 4; ty = d.height / 2; }
             g.attr("transform", `translate(${tx}, ${ty})`);
 
-            // Style circle
+            // child count label (above the circle)
+            g.select<SVGTextElement>("text.orgchart__child-count")
+                .text(d.hasChildren ? `(${directCount})` : "")
+                .style("display", d.hasChildren ? "inline" : "none")
+                .attr("x", 0).attr("y", 0).attr("dy", "-12");
+
+            // toggle circle
             g.select<SVGCircleElement>("circle.orgchart__node-toggle-bg")
-                .attr("r", 9)
-                .attr("fill", "#ffffff")
+                .attr("r", 8).attr("fill", "#ffffff")
                 .attr("stroke", "var(--org-link-color)")
                 .attr("stroke-width", 1.2);
 
-            // Horizontal line (always visible)
+            // minus line
             g.select<SVGLineElement>("line.orgchart__toggle-line-h")
-                .attr("x1", -5).attr("y1", 0)
-                .attr("x2", 5).attr("y2", 0)
+                .attr("x1", -4.5).attr("y1", 0)
+                .attr("x2", 4.5).attr("y2", 0)
                 .attr("stroke", "var(--org-link-color)")
-                .attr("stroke-width", 1.6)
+                .attr("stroke-width", 1.4)
                 .attr("stroke-linecap", "round");
 
-            // Vertical line (only for '+')
+            // plus vertical line (only when collapsed)
             const showPlus = d.isCollapsed;
             g.select<SVGLineElement>("line.orgchart__toggle-line-v")
-                .attr("x1", 0).attr("y1", -5)
-                .attr("x2", 0).attr("y2", 5)
+                .attr("x1", 0).attr("y1", -4.5)
+                .attr("x2", 0).attr("y2", 4.5)
                 .attr("stroke", "var(--org-link-color)")
-                .attr("stroke-width", 1.6)
+                .attr("stroke-width", 1.4)
                 .attr("stroke-linecap", "round")
                 .style("display", showPlus ? "inline" : "none");
         });
@@ -929,21 +968,39 @@ export class Visual implements IVisual {
         this.render();
     }
 
-    private toggleNodeCollapse(nodeId: string): void {
-        if (this.collapsedNodes.has(nodeId)) this.collapsedNodes.delete(nodeId);
-        else this.collapsedNodes.add(nodeId);
+    // Expand/collapse with anchor preservation; expand only ONE level
+    private toggleNodeCollapseAnchoredOneLevel(nodeId: string): void {
+        const beforePos = this.nodePositions.get(nodeId);
+        const wasCollapsed = this.collapsedNodes.has(nodeId);
+
+        const k = this.currentTransform.k;
+        const screenX = beforePos ? beforePos.absCenterX * k + this.currentTransform.x : 0;
+        const screenY = beforePos ? beforePos.absCenterY * k + this.currentTransform.y : 0;
+
+        if (wasCollapsed) this.expandOneLevel(nodeId);
+        else this.collapsedNodes.add(nodeId); // collapse whole subtree implicitly
+
         this.render();
+
+        const afterPos = this.nodePositions.get(nodeId);
+        if (beforePos && afterPos) {
+            const newX = screenX - afterPos.absCenterX * k;
+            const newY = screenY - afterPos.absCenterY * k;
+            const t = d3.zoomIdentity.translate(newX, newY).scale(k);
+            this.svg.transition().duration(0).call(this.zoomBehavior.transform, t);
+        }
     }
 
-    private ensureNodeVisible(nodeId: string): void {
-        const visited = new Set<string>();
-        let current = this.nodesById.get(nodeId);
-        while (current && current.payload) {
-            if (visited.has(current.id)) break;
-            visited.add(current.id);
-            this.collapsedNodes.delete(current.id);
-            const parentId = current.payload.parentId;
-            current = parentId ? this.nodesById.get(parentId) : undefined;
+    // Only reveal the direct children; keep grandchildren collapsed
+    private expandOneLevel(nodeId: string): void {
+        // remove this node from collapsed
+        this.collapsedNodes.delete(nodeId);
+        // add all direct children to collapsed so they appear but their children remain hidden
+        const node = this.nodesById.get(nodeId);
+        if (node) {
+            node.children.forEach((c) => {
+                if (c.payload) this.collapsedNodes.add(c.payload.id);
+            });
         }
     }
 
@@ -969,7 +1026,7 @@ export class Visual implements IVisual {
         this.svg.transition().duration(0).call(this.zoomBehavior.transform, transform);
     }
 
-    private fitToViewport(): void {
+    private fitToViewport(duration: number = 400): void {
         if (!this.allowZoom || !this.layoutBounds) return;
         const b = this.layoutBounds;
         const width = Math.max(this.viewport.width, 1);
@@ -980,7 +1037,7 @@ export class Visual implements IVisual {
         const translateX = (width - contentWidth * scale) / 2;
         const translateY = (height - contentHeight * scale) / 2;
         const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
-        this.svg.transition().duration(0).call(this.zoomBehavior.transform, transform);
+        this.svg.transition().duration(duration).call(this.zoomBehavior.transform, transform);
     }
 
     private resetZoom(): void {
@@ -1015,6 +1072,31 @@ export class Visual implements IVisual {
         } else {
             this.clearHighlights();
         }
+    }
+
+    private ensureNodeVisible(nodeId: string): void {
+        const visited = new Set<string>();
+        let current = this.nodesById.get(nodeId);
+        while (current && current.payload) {
+            if (visited.has(current.id)) break;
+            visited.add(current.id);
+            this.collapsedNodes.delete(current.id);
+            const parentId = current.payload.parentId;
+            current = parentId ? this.nodesById.get(parentId) : undefined;
+        }
+    }
+
+    private buildVisibleTree(): ChartNode | null {
+        if (!this.fullTree) return null;
+
+        const cloneNode = (node: ChartNode): ChartNode => {
+            const payloadId = node.payload?.id;
+            const isCollapsed = payloadId ? this.collapsedNodes.has(payloadId) : false;
+            const children = isCollapsed ? [] : node.children.map((child) => cloneNode(child));
+            return { id: node.id, payload: node.payload, children, totalChildCount: node.totalChildCount };
+        };
+
+        return cloneNode(this.fullTree);
     }
 
     private getPathToRoot(nodeId: string): string[] {
