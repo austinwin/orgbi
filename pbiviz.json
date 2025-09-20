@@ -1,0 +1,21 @@
+{
+  "visual": {
+    "name": "orgChart",
+    "displayName": "Org Chart",
+    "guid": "orgChartA14B4AE4AC5F4BBF9EB7A7C7D12B5EF",
+    "visualClassName": "Visual",
+    "version": "1.0.0.0",
+    "description": "Interactive organisation chart with rich cards, search and layout controls.",
+    "supportUrl": "https://circlecard.example.com/support",
+    "gitHubUrl": "https://github.com/org/circleCard"
+  },
+  "apiVersion": "5.3.0",
+  "author": { "name": "CircleCard Team", "email": "support@circlecard.example.com" },
+  "assets": { "icon": "assets/icon.png" },
+  "externalJS": null,
+  "style": "style/visual.less",
+  "capabilities": "capabilities.json",
+  "dependencies": null,
+  "stringResources": [],
+  "version": "1.0.0.0"
+}
