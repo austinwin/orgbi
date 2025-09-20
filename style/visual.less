@@ -31,6 +31,11 @@
   backdrop-filter: blur(10px);
 }
 
+.orgcard__titles { display:flex; flex-direction:column; gap:2px; }
+.orgcard__title, .orgcard__division { font-size: var(--org-detail-size); opacity:.72; }
+
+.orgchart__node { will-change: transform; }
+.orgchart__nodes foreignObject { overflow: visible; }
 @supports not (backdrop-filter: blur(10px)) {
   .orgchart__toolbar-rail {
     background: rgba(255, 255, 255, 0.97);
@@ -480,19 +485,24 @@
 }
 
 /* Animation for expand/collapse */
-.orgchart__node {
-  animation: nodeAppear 0.3s ease-out;
+/* NEVER animate transform on the <g>. Fade the inner card instead. */
+.orgchart__node { 
+  /* hard stop: no transform animations on the group */
+  animation: none;
+  transition: none;
+  /* keep this if you like */
+  will-change: transform;
 }
 
-@keyframes nodeAppear {
-  from {
-    opacity: 0;
-    transform: scale(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+/* Soft appear for new nodes: opacity only on the SVG rect + HTML card */
+.orgchart__node .orgchart__node-bg,
+.orgchart__node .orgcard {
+  animation: nodeFadeIn 120ms ease-out;
+}
+
+@keyframes nodeFadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* Custom scrollbar for webkit browsers */
