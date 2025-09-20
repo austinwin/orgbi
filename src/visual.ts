@@ -1,27 +1,6 @@
-/*
+/* 
 *  Power BI Visual CLI
-*
-*  Copyright (c) Microsoft Corporation
-*  All rights reserved.
 *  MIT License
-*
-*  Permission is hereby granted, free of charge, to any person obtaining a copy
-*  of this software and associated documentation files (the "Software"), to deal
-*  in the Software without restriction, including without limitation the rights
-*  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-*  copies of the Software, and to permit persons to whom the Software is
-*  furnished to do so, subject to the following conditions:
-*
-*  The above copyright notice and this permission notice shall be included in
-*  all copies or substantial portions of the Software.
-*
-*  THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-*  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-*  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-*  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-*  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-*  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-*  THE SOFTWARE.
 */
 "use strict";
 
@@ -122,14 +101,13 @@ export class Visual implements IVisual {
     private formattingSettings: VisualFormattingSettingsModel;
 
     private root: HTMLDivElement;
+
+    // Compact rail-only toolbar
     private toolbar: HTMLDivElement;
     private toolbarRail: HTMLDivElement;
     private toolbarToggle: HTMLButtonElement;
-    private toolbarToggleLabel: HTMLSpanElement;
-    private toolbarMenu: HTMLDivElement;
-    private toolbarMenuHeader: HTMLButtonElement;
-    private toolbarMenuItems: HTMLDivElement;
-    private toolbarMenuOpen: boolean = true;
+    private controlsVisible: boolean = true;
+
     private canvas: HTMLDivElement;
     private svgElement: SVGSVGElement;
     private svg: d3.Selection<SVGSVGElement, unknown, null, undefined>;
@@ -150,7 +128,6 @@ export class Visual implements IVisual {
     private layoutBounds: { minX: number; maxX: number; minY: number; maxY: number; baseX: number; baseY: number; padding: number; } | null = null;
     private currentTransform: d3.ZoomTransform = d3.zoomIdentity;
     private selectedKeys: Set<string> = new Set();
-    private filterNodeIds: Set<string> = new Set();
     private identityToNodeId: Map<string, string> = new Map();
     private nameToNodeId: Map<string, string> = new Map();
 
@@ -165,43 +142,23 @@ export class Visual implements IVisual {
         this.root.className = "orgchart-visual";
         this.root.dataset.toolbarVisible = "1";
 
+        // ===== Toolbar (compact rail only) =====
         this.toolbar = document.createElement("div");
         this.toolbar.className = "orgchart__toolbar";
         this.root.appendChild(this.toolbar);
 
         this.toolbarRail = document.createElement("div");
         this.toolbarRail.className = "orgchart__toolbar-rail";
+        Object.assign(this.toolbarRail.style, {
+            width: "36px",
+            padding: "4px 3px",
+            borderRadius: "14px",
+            boxShadow: "0 6px 16px rgba(15,23,42,0.10)",
+            backdropFilter: "blur(6px)",
+        } as CSSStyleDeclaration);
         this.toolbar.appendChild(this.toolbarRail);
 
-        this.toolbarMenu = document.createElement("div");
-        this.toolbarMenu.className = "orgchart__menu";
-        this.root.appendChild(this.toolbarMenu);
-
-        const menuCard = document.createElement("div");
-        menuCard.className = "orgchart__menu-card";
-        this.toolbarMenu.appendChild(menuCard);
-
-        this.toolbarMenuHeader = document.createElement("button");
-        this.toolbarMenuHeader.type = "button";
-        this.toolbarMenuHeader.className = "orgchart__menu-header";
-        this.toolbarMenuHeader.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            this.toolbarMenuOpen = !this.toolbarMenuOpen;
-            this.updateToolbarMenuState();
-        });
-        const headerIcon = this.createToolbarIcon("menu");
-        headerIcon.classList.add("orgchart__toolbar-icon");
-        this.toolbarMenuHeader.appendChild(headerIcon);
-        this.toolbarToggleLabel = document.createElement("span");
-        this.toolbarToggleLabel.className = "orgchart__menu-header-label";
-        this.toolbarMenuHeader.appendChild(this.toolbarToggleLabel);
-        menuCard.appendChild(this.toolbarMenuHeader);
-
-        this.toolbarMenuItems = document.createElement("div");
-        this.toolbarMenuItems.className = "orgchart__menu-items";
-        menuCard.appendChild(this.toolbarMenuItems);
-
+        // ===== Canvas + SVG =====
         this.canvas = document.createElement("div");
         this.canvas.className = "orgchart__canvas";
         this.root.appendChild(this.canvas);
@@ -215,7 +172,6 @@ export class Visual implements IVisual {
             .scaleExtent([ZOOM_MIN, ZOOM_MAX])
             .on("zoom", (event) => this.onZoom(event))
             .filter((event) => {
-                // Allow mouse wheel zoom and pan, prevent conflicts
                 if (event.type === 'wheel') return true;
                 return !event.ctrlKey && !event.button;
             });
@@ -239,7 +195,7 @@ export class Visual implements IVisual {
         this.canvas.appendChild(this.emptyState);
 
         this.buildToolbar();
-        this.updateToolbarMenuState();
+        this.updateToolbarRailState();
 
         options.element.appendChild(this.root);
     }
@@ -265,65 +221,51 @@ export class Visual implements IVisual {
         return this.formattingSettingsService.buildFormattingModel(this.formattingSettings);
     }
 
+    // ================= Toolbar (rail-only, compact) =================
+
     private buildToolbar(): void {
-        if (!this.toolbarRail || !this.toolbarMenuItems) {
-            return;
-        }
+        if (!this.toolbarRail) return;
 
-        while (this.toolbarRail.firstChild) {
-            this.toolbarRail.removeChild(this.toolbarRail.firstChild);
-        }
-        while (this.toolbarMenuItems.firstChild) {
-            this.toolbarMenuItems.removeChild(this.toolbarMenuItems.firstChild);
-        }
+        while (this.toolbarRail.firstChild) this.toolbarRail.removeChild(this.toolbarRail.firstChild);
 
-        this.toolbarToggle = this.createToolbarRailButton("menu", "Hide controls", () => {
-            this.toolbarMenuOpen = !this.toolbarMenuOpen;
-            this.updateToolbarMenuState();
+        // Always-visible toggle (28px)
+        this.toolbarToggle = this.createToolbarRailButton("menu", "Show/Hide controls", () => {
+            this.controlsVisible = !this.controlsVisible;
+            this.updateToolbarRailState();
         });
         this.toolbarToggle.classList.add("orgchart__toolbar-btn--toggle");
         this.toolbarRail.appendChild(this.toolbarToggle);
 
-        const buttons: Array<{ label: string; title: string; icon: ToolbarIcon; onClick: () => void; }> = [
-            {
-                label: "Switch layout",
-                title: "Toggle between vertical and horizontal layouts",
-                icon: "layout",
-                onClick: () => this.toggleOrientation()
-            },
-            {
-                label: "Expand all",
-                title: "Expand all nodes",
-                icon: "expand",
-                onClick: () => this.expandAll()
-            },
-            {
-                label: "Collapse all",
-                title: "Collapse to root nodes",
-                icon: "collapse",
-                onClick: () => this.collapseAll()
-            },
-            {
-                label: "Fit",
-                title: "Fit chart to view",
-                icon: "fit",
-                onClick: () => this.fitToViewport()
-            },
-            {
-                label: "Reset",
-                title: "Reset zoom and pan",
-                icon: "reset",
-                onClick: () => this.resetZoom()
-            }
+        // Action buttons (compact)
+        const buttons: Array<{ title: string; icon: ToolbarIcon; onClick: () => void; }> = [
+            { title: "Toggle vertical / horizontal", icon: "layout", onClick: () => this.toggleOrientation() },
+            { title: "Expand all nodes", icon: "expand", onClick: () => this.expandAll() },
+            { title: "Collapse to root", icon: "collapse", onClick: () => this.collapseAll() },
+            { title: "Fit to view", icon: "fit", onClick: () => this.fitToViewport() },
+            { title: "Reset zoom/pan", icon: "reset", onClick: () => this.resetZoom() }
         ];
 
         buttons.forEach((config) => {
-            const railButton = this.createToolbarRailButton(config.icon, config.title, config.onClick);
-            this.toolbarRail.appendChild(railButton);
-
-            const menuButton = this.createToolbarMenuButton(config.label, config.title, config.icon, config.onClick);
-            this.toolbarMenuItems.appendChild(menuButton);
+            const btn = this.createToolbarRailButton(config.icon, config.title, config.onClick);
+            btn.classList.add("orgchart__toolbar-btn--action");
+            this.toolbarRail.appendChild(btn);
         });
+    }
+
+    private updateToolbarRailState(): void {
+        if (!this.toolbarRail) return;
+        const children = Array.from(this.toolbarRail.children) as HTMLElement[];
+        children.forEach((el) => {
+            if (el === this.toolbarToggle) return;
+            el.style.display = this.controlsVisible ? "inline-flex" : "none";
+        });
+
+        const label = this.controlsVisible ? "Hide controls" : "Show controls";
+        this.toolbarToggle.setAttribute("aria-expanded", this.controlsVisible ? "true" : "false");
+        this.toolbarToggle.setAttribute("aria-label", label);
+        this.toolbarToggle.title = label;
+
+        if (this.root) this.root.dataset.toolbarMenu = this.controlsVisible ? "1" : "0";
     }
 
     private createToolbarRailButton(icon: ToolbarIcon, title: string, onClick: () => void): HTMLButtonElement {
@@ -333,33 +275,23 @@ export class Visual implements IVisual {
         button.title = title;
         button.setAttribute("aria-label", title);
 
-        const iconElement = this.createToolbarIcon(icon);
-        iconElement.classList.add("orgchart__toolbar-icon");
-        button.appendChild(iconElement);
-
-        button.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onClick();
-        });
-        return button;
-    }
-
-    private createToolbarMenuButton(label: string, title: string, icon: ToolbarIcon, onClick: () => void): HTMLButtonElement {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "orgchart__menu-item";
-        button.title = title;
-        button.setAttribute("aria-label", title);
+        // Compact sizing + narrower gaps
+        Object.assign(button.style, {
+            width: "28px",
+            height: "28px",
+            borderRadius: "9px",
+            margin: "2px",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "0"
+        } as CSSStyleDeclaration);
 
         const iconElement = this.createToolbarIcon(icon);
         iconElement.classList.add("orgchart__toolbar-icon");
+        iconElement.setAttribute("width", "18");
+        iconElement.setAttribute("height", "18");
         button.appendChild(iconElement);
-
-        const textElement = document.createElement("span");
-        textElement.className = "orgchart__menu-item-label";
-        textElement.textContent = label;
-        button.appendChild(textElement);
 
         button.addEventListener("click", (event) => {
             event.preventDefault();
@@ -378,7 +310,7 @@ export class Visual implements IVisual {
 
         const applyStroke = <T extends SVGElement>(element: T): T => {
             element.setAttribute("stroke", "currentColor");
-            element.setAttribute("stroke-width", "1.8");
+            element.setAttribute("stroke-width", "1.6");
             element.setAttribute("stroke-linecap", "round");
             element.setAttribute("stroke-linejoin", "round");
             return element;
@@ -433,76 +365,20 @@ export class Visual implements IVisual {
         };
 
         switch (icon) {
-            case "menu": {
-                [7, 12, 17].forEach((y) => createLine(5, y, 19, y));
-                break;
-            }
-            case "layout": {
-                createRect(4.5, 4, 7.5, 16);
-                createRect(13.5, 8, 7.5, 12);
-                break;
-            }
-            case "expand": {
-                createCircle(12, 12, 8);
-                createLine(12, 8.5, 12, 15.5);
-                createLine(8.5, 12, 15.5, 12);
-                break;
-            }
-            case "collapse": {
-                createCircle(12, 12, 8);
-                createLine(8.5, 12, 15.5, 12);
-                break;
-            }
-            case "fit": {
-                createCircle(11, 11, 5.5);
-                createLine(15, 15, 20, 20);
-                break;
-            }
-            case "reset": {
-                createPath("M20 12a8 8 0 1 1-2.34-5.66");
-                createPolyline("20,6 20,12 14,12");
-                break;
-            }
+            case "menu": { [7, 12, 17].forEach((y) => createLine(5, y, 19, y)); break; }
+            case "layout": { createRect(4.5, 4, 7.5, 16); createRect(13.5, 8, 7.5, 12); break; }
+            case "expand": { createCircle(12, 12, 8); createLine(12, 8.5, 12, 15.5); createLine(8.5, 12, 15.5, 12); break; }
+            case "collapse": { createCircle(12, 12, 8); createLine(8.5, 12, 15.5, 12); break; }
+            case "fit": { createCircle(11, 11, 5.5); createLine(15, 15, 20, 20); break; }
+            case "reset": { createPath("M20 12a8 8 0 1 1-2.34-5.66"); createPolyline("20,6 20,12 14,12"); break; }
         }
-
         return svg;
     }
 
-    private updateToolbarMenuState(): void {
-        if (!this.toolbar || !this.toolbarToggle || !this.toolbarMenu) {
-            return;
-        }
-
-        const isVisible = this.showToolbar;
-        const isOpen = isVisible && this.toolbarMenuOpen;
-
-        this.toolbarMenu.classList.toggle("is-open", isOpen);
-        this.toolbarMenu.style.display = isVisible ? "block" : "none";
-
-        const label = isOpen ? "Hide controls" : "Show controls";
-        this.toolbarToggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
-        this.toolbarToggle.setAttribute("aria-label", label);
-        this.toolbarToggle.title = label;
-
-        if (this.toolbarMenuHeader) {
-            this.toolbarMenuHeader.setAttribute("aria-expanded", isOpen ? "true" : "false");
-            this.toolbarMenuHeader.setAttribute("aria-label", label);
-            this.toolbarMenuHeader.title = label;
-        }
-
-        if (this.toolbarToggleLabel) {
-            this.toolbarToggleLabel.textContent = label;
-        }
-
-        if (this.root) {
-            this.root.dataset.toolbarMenu = isOpen ? "1" : "0";
-        }
-    }
+    // ================= Formatting / data =================
 
     private applyFormatting(): void {
-        if (!this.formattingSettings) {
-            return;
-        }
+        if (!this.formattingSettings) return;
 
         const layout = this.formattingSettings.layout;
         const card = this.formattingSettings.card;
@@ -515,8 +391,8 @@ export class Visual implements IVisual {
         const nameSize = this.clampNumber(labels.nameTextSize.value, 8, 32, 16);
         const titleSize = this.clampNumber(labels.titleTextSize.value, 8, 28, 12);
         const detailSize = this.clampNumber(labels.detailTextSize.value, 6, 24, 11);
-        const linkWidth = this.clampNumber(links.linkWidth.value, 0.5, 6, 1.8);
-        const linkOpacity = this.clampNumber(links.linkOpacity.value, 0.1, 1, 0.8);
+        const linkWidth = this.clampNumber(links.linkWidth.value, 0.5, 6, 1.6);
+        const linkOpacity = this.clampNumber(links.linkOpacity.value, 0.1, 1, 0.9);
         const borderWidth = this.clampNumber(card.borderWidth.value, 0, 8, 1);
         const borderRadius = this.clampNumber(card.borderRadius.value, 0, 50, 18);
         const alignment = (card.cardAlignment.value?.value as string) || "start";
@@ -538,10 +414,11 @@ export class Visual implements IVisual {
         this.root.dataset.cardAlign = alignment;
         this.root.style.setProperty("--org-show-images", card.showImage.value ? "1" : "0");
 
+        // Toolbar visibility
         this.toolbar.style.display = this.showToolbar ? "block" : "none";
         this.root.dataset.toolbarVisible = this.showToolbar ? "1" : "0";
-        this.updateToolbarMenuState();
 
+        // Zoom enable/disable
         if (this.allowZoom) {
             this.svg.call(this.zoomBehavior);
         } else {
@@ -554,9 +431,7 @@ export class Visual implements IVisual {
     private transform(dataView?: DataView): TransformResult {
         this.identityToNodeId.clear();
         this.nameToNodeId.clear();
-        if (!dataView || !dataView.table) {
-            return { tree: null, nodesById: new Map(), warnings: ["No data"] };
-        }
+        if (!dataView || !dataView.table) return { tree: null, nodesById: new Map(), warnings: ["No data"] };
 
         const table: DataViewTable = dataView.table;
         const columns = table.columns || [];
@@ -583,15 +458,9 @@ export class Visual implements IVisual {
         const metricIndexes: number[] = [];
 
         columns.forEach((column, index) => {
-            if (!column.roles) {
-                return;
-            }
-            if (column.roles.details) {
-                detailIndexes.push(index);
-            }
-            if (column.roles.metric) {
-                metricIndexes.push(index);
-            }
+            if (!column.roles) return;
+            if (column.roles.details) detailIndexes.push(index);
+            if (column.roles.metric) metricIndexes.push(index);
         });
 
         const nodes: OrgChartDatum[] = [];
@@ -600,9 +469,7 @@ export class Visual implements IVisual {
         table.rows.forEach((row: DataViewTableRow, rowIndex: number) => {
             const employeeValue = row[roleIndexes.employee!];
             const employeeId = this.toKey(employeeValue);
-            if (!employeeId) {
-                return;
-            }
+            if (!employeeId) return;
 
             const managerValue = roleIndexes.manager !== undefined ? row[roleIndexes.manager] : undefined;
             const parentId = this.toKey(managerValue);
@@ -615,33 +482,17 @@ export class Visual implements IVisual {
             const details: FieldValue[] = [];
             detailIndexes.forEach((index) => {
                 const value = this.toText(row[index]);
-                if (value) {
-                    details.push({
-                        label: columns[index].displayName,
-                        value,
-                        role: "detail"
-                    });
-                }
+                if (value) details.push({ label: columns[index].displayName, value, role: "detail" });
             });
 
             const metrics: FieldValue[] = [];
             metricIndexes.forEach((index) => {
                 const value = this.formatMetric(row[index], columns[index]);
-                if (value) {
-                    metrics.push({
-                        label: columns[index].displayName,
-                        value,
-                        role: "metric"
-                    });
-                }
+                if (value) metrics.push({ label: columns[index].displayName, value, role: "metric" });
             });
 
-            if (department) {
-                details.unshift({ label: "", value: department, role: "department" });
-            }
-            if (title) {
-                details.unshift({ label: "", value: title, role: "title" });
-            }
+            if (department) details.unshift({ label: "", value: department, role: "department" });
+            if (title) details.unshift({ label: "", value: title, role: "title" });
 
             const identity = this.host.createSelectionIdBuilder()
                 .withTable(table, rowIndex)
@@ -664,9 +515,7 @@ export class Visual implements IVisual {
             this.nameToNodeId.set(datum.displayName.toLowerCase(), datum.id);
         });
 
-        if (!nodes.length) {
-            return { tree: null, nodesById: new Map(), warnings: ["No valid rows"] };
-        }
+        if (!nodes.length) return { tree: null, nodesById: new Map(), warnings: ["No valid rows"] };
 
         const virtualRoot: ChartNode = { id: "__virtual__", payload: null, children: [], totalChildCount: 0 };
         const chartNodes: Map<string, ChartNode> = new Map();
@@ -680,10 +529,7 @@ export class Visual implements IVisual {
             const parentId = node.payload?.parentId;
             if (parentId && parentId !== node.id) {
                 const parent = chartNodes.get(parentId);
-                if (parent) {
-                    parent.children.push(node);
-                    return;
-                }
+                if (parent) { parent.children.push(node); return; }
             }
             virtualRoot.children.push(node);
         });
@@ -701,38 +547,28 @@ export class Visual implements IVisual {
     }
 
     private pruneCollapsedNodes(): void {
-        if (!this.fullTree) {
-            this.collapsedNodes.clear();
-            return;
-        }
+        if (!this.fullTree) { this.collapsedNodes.clear(); return; }
         const validIds = new Set<string>();
         this.nodesById.forEach((_node, id) => validIds.add(id));
         Array.from(this.collapsedNodes).forEach((id) => {
-            if (!validIds.has(id)) {
-                this.collapsedNodes.delete(id);
-            }
+            if (!validIds.has(id)) this.collapsedNodes.delete(id);
         });
     }
 
     private buildVisibleTree(): ChartNode | null {
-        if (!this.fullTree) {
-            return null;
-        }
+        if (!this.fullTree) return null;
 
         const cloneNode = (node: ChartNode): ChartNode => {
             const payloadId = node.payload?.id;
             const isCollapsed = payloadId ? this.collapsedNodes.has(payloadId) : false;
             const children = isCollapsed ? [] : node.children.map((child) => cloneNode(child));
-            return {
-                id: node.id,
-                payload: node.payload,
-                children,
-                totalChildCount: node.totalChildCount
-            };
+            return { id: node.id, payload: node.payload, children, totalChildCount: node.totalChildCount };
         };
 
         return cloneNode(this.fullTree);
     }
+
+    // ================= Render =================
 
     private render(): void {
         const layout = this.formattingSettings?.layout;
@@ -754,7 +590,8 @@ export class Visual implements IVisual {
         }
 
         const root = d3.hierarchy<ChartNode>(visibleTree!, (node) => node.children);
-        const treeLayout = d3.tree<ChartNode>().nodeSize([nodeWidth + horizontalSpacing, nodeHeight + verticalSpacing])
+        const treeLayout = d3.tree<ChartNode>()
+            .nodeSize([nodeWidth + horizontalSpacing, nodeHeight + verticalSpacing])
             .separation((a, b) => (a.parent === b.parent ? 1 : 1.3));
         const layoutRoot = treeLayout(root);
 
@@ -763,9 +600,7 @@ export class Visual implements IVisual {
         const renderNodes: RenderNode[] = [];
 
         layoutRoot.descendants().forEach((node) => {
-            if (!node.data.payload) {
-                return;
-            }
+            if (!node.data.payload) return;
             const payload = node.data.payload;
             const centerX = orientation === "vertical" ? node.x : node.y;
             const centerY = orientation === "vertical" ? node.y : node.x;
@@ -775,22 +610,14 @@ export class Visual implements IVisual {
                 payload,
                 hasChildren: node.data.totalChildCount > 0,
                 isCollapsed: this.collapsedNodes.has(payload.id),
-                x,
-                y,
-                centerX,
-                centerY,
-                width: nodeWidth,
-                height: nodeHeight,
-                node
+                x, y, centerX, centerY, width: nodeWidth, height: nodeHeight, node
             };
             nodeMap.set(payload.id, renderNode);
             renderNodes.push(renderNode);
         });
 
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minY = Infinity;
-        let maxY = -Infinity;
+        // bounds
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         renderNodes.forEach((rn) => {
             minX = Math.min(minX, rn.x);
             maxX = Math.max(maxX, rn.x + rn.width);
@@ -806,39 +633,24 @@ export class Visual implements IVisual {
         this.nodePositions.clear();
         renderNodes.forEach((rn) => {
             this.nodePositions.set(rn.payload.id, {
-                x: rn.x,
-                y: rn.y,
-                centerX: rn.centerX,
-                centerY: rn.centerY,
-                absX: rn.x + baseX,
-                absY: rn.y + baseY,
-                absCenterX: rn.centerX + baseX,
-                absCenterY: rn.centerY + baseY,
-                width: rn.width,
-                height: rn.height
+                x: rn.x, y: rn.y, centerX: rn.centerX, centerY: rn.centerY,
+                absX: rn.x + baseX, absY: rn.y + baseY,
+                absCenterX: rn.centerX + baseX, absCenterY: rn.centerY + baseY,
+                width: rn.width, height: rn.height
             });
         });
 
+        // links
         const linkData: RenderLink[] = [];
         layoutRoot.links().forEach((link) => {
-            const sourcePayload = link.source.data.payload;
-            const targetPayload = link.target.data.payload;
-            if (!sourcePayload || !targetPayload) {
-                return;
-            }
-            const sourceNode = nodeMap.get(sourcePayload.id);
-            const targetNode = nodeMap.get(targetPayload.id);
-            if (sourceNode && targetNode) {
-                linkData.push({ 
-                    source: sourceNode, 
-                    target: targetNode, 
-                    key: `${sourceNode.payload.id}-${targetNode.payload.id}` 
-                });
-            }
+            const sp = link.source.data.payload, tp = link.target.data.payload;
+            if (!sp || !tp) return;
+            const s = nodeMap.get(sp.id), t = nodeMap.get(tp.id);
+            if (s && t) linkData.push({ source: s, target: t, key: `${s.payload.id}-${t.payload.id}` });
         });
 
         const linkSelection = this.linksGroup.selectAll<SVGPathElement, RenderLink>("path.orgchart__link")
-            .data(linkData, (d: RenderLink) => `${d.source.payload.id}-${d.target.payload.id}`);
+            .data(linkData, (d: RenderLink) => d.key);
 
         linkSelection.enter()
             .append("path")
@@ -856,6 +668,7 @@ export class Visual implements IVisual {
 
         linkSelection.exit().remove();
 
+        // nodes
         const nodeSelection = this.nodesGroup.selectAll<SVGGElement, RenderNode>("g.orgchart__node")
             .data(renderNodes, (d: RenderNode) => d.payload.id);
 
@@ -863,8 +676,10 @@ export class Visual implements IVisual {
             .append("g")
             .attr("class", "orgchart__node")
             .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+            .style("visibility", "hidden") // prevent 0,0 flicker on first paint
             .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
 
+        // card bg
         nodeEnter.append("rect")
             .attr("class", "orgchart__node-bg")
             .attr("width", (d) => d.width)
@@ -872,6 +687,7 @@ export class Visual implements IVisual {
             .attr("rx", this.clampNumber(this.formattingSettings.card.borderRadius.value, 0, 50, 18))
             .attr("ry", this.clampNumber(this.formattingSettings.card.borderRadius.value, 0, 50, 18));
 
+        // card content in foreignObject
         nodeEnter.each((d, index, groups) => {
             const group = groups[index];
             const foreignObject = d3.select(group)
@@ -885,30 +701,40 @@ export class Visual implements IVisual {
                 .attr("data-card-align", this.formattingSettings.card.cardAlignment.value?.value || "start");
 
             const header = card.append("div").attr("class", "orgcard__header");
-            const avatar = header.append("div").attr("class", "orgcard__avatar");
-            avatar.attr("data-id", d.payload.id);
-
+            const avatar = header.append("div").attr("class", "orgcard__avatar").attr("data-id", d.payload.id);
             const titles = header.append("div").attr("class", "orgcard__titles");
             titles.append("div").attr("class", "orgcard__name");
             titles.append("div").attr("class", "orgcard__title");
-
-            const toggle = header.append("button")
-                .attr("type", "button")
-                .attr("class", "orgcard__toggle")
-                .text(d.hasChildren ? (d.isCollapsed ? "+" : "−") : "")
-                .on("click", (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (d.hasChildren) {
-                        this.toggleNodeCollapse(d.payload.id);
-                    }
-                });
 
             card.append("div").attr("class", "orgcard__details");
             card.append("div").attr("class", "orgcard__metrics");
         });
 
+        // SVG toggle at connector origin
+        nodeEnter.append("g")
+            .attr("class", "orgchart__node-toggle")
+            .style("cursor", "pointer")
+            .on("click", (event, d) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (d.hasChildren) this.toggleNodeCollapse(d.payload.id);
+            })
+            .each((d, i, groups) => {
+                const g = d3.select(groups[i]);
+                g.append("circle")
+                    .attr("r", 9)
+                    .attr("class", "orgchart__node-toggle-bg")
+                    .style("pointer-events", "all");
+                g.append("line").attr("class", "orgchart__toggle-line-h").style("pointer-events", "none");
+                g.append("line").attr("class", "orgchart__toggle-line-v").style("pointer-events", "none");
+            });
+
+        // Update visuals
         this.updateNodeContent(nodeSelection.merge(nodeEnter));
+        this.updateNodeToggles(nodeSelection.merge(nodeEnter));
+
+        // Finalize nodes (show them now to avoid flicker)
+        nodeEnter.style("visibility", "visible");
 
         nodeSelection.merge(nodeEnter)
             .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
@@ -919,13 +745,10 @@ export class Visual implements IVisual {
 
         nodeSelection.exit().remove();
 
-        // Apply highlighting effects after rendering if there are selections
         if (this.selectedKeys.size > 0) {
             const selectedNodeId = Array.from(this.identityToNodeId.entries())
                 .find(([key]) => this.selectedKeys.has(key))?.[1];
-            if (selectedNodeId) {
-                this.highlightPath(selectedNodeId);
-            }
+            if (selectedNodeId) this.highlightPath(selectedNodeId);
         }
     }
 
@@ -936,8 +759,7 @@ export class Visual implements IVisual {
                 .attr("width", d.width)
                 .attr("height", d.height);
 
-            const foreign = group.select<SVGForeignObjectElement>("foreignObject");
-            foreign
+            const foreign = group.select<SVGForeignObjectElement>("foreignObject")
                 .attr("width", d.width)
                 .attr("height", d.height);
 
@@ -947,7 +769,6 @@ export class Visual implements IVisual {
             const titleEl = card.select<HTMLDivElement>(".orgcard__title");
             const detailsEl = card.select<HTMLDivElement>(".orgcard__details");
             const metricsEl = card.select<HTMLDivElement>(".orgcard__metrics");
-            const toggleButton = card.select<HTMLButtonElement>(".orgcard__toggle");
 
             const payload = d.payload;
 
@@ -968,13 +789,9 @@ export class Visual implements IVisual {
 
             const detailNode = detailsEl.node();
             if (detailNode) {
-                while (detailNode.firstChild) {
-                    detailNode.removeChild(detailNode.firstChild);
-                }
+                while (detailNode.firstChild) detailNode.removeChild(detailNode.firstChild);
                 payload.details.forEach((item) => {
-                    if (!item.value || item.role === "title" || item.role === "department") {
-                        return;
-                    }
+                    if (!item.value || item.role === "title" || item.role === "department") return;
                     const line = detailNode.ownerDocument!.createElement("div");
                     line.className = "orgcard__detail-line";
                     if (item.label) {
@@ -993,13 +810,9 @@ export class Visual implements IVisual {
 
             const metricNode = metricsEl.node();
             if (metricNode) {
-                while (metricNode.firstChild) {
-                    metricNode.removeChild(metricNode.firstChild);
-                }
+                while (metricNode.firstChild) metricNode.removeChild(metricNode.firstChild);
                 payload.metrics.forEach((metric) => {
-                    if (!metric.value) {
-                        return;
-                    }
+                    if (!metric.value) return;
                     const badge = metricNode.ownerDocument!.createElement("div");
                     badge.className = "orgcard__metric";
                     if (metric.label) {
@@ -1015,30 +828,71 @@ export class Visual implements IVisual {
                     metricNode.appendChild(badge);
                 });
             }
+        });
+    }
 
-            toggleButton.text(d.hasChildren ? (d.isCollapsed ? "+" : "−") : "");
+    // Position + draw toggle glyphs relative to card and orientation
+    private updateNodeToggles(selection: d3.Selection<SVGGElement, RenderNode, any, unknown>): void {
+        selection.each((d, i, groups) => {
+            const g = d3.select(groups[i]).select<SVGGElement>("g.orgchart__node-toggle");
+            if (g.empty()) return;
+
+            // Hide toggle if no children
+            g.style("display", d.hasChildren ? "inline" : "none");
+
+            // Position at connector origin
+            let tx = 0, ty = 0;
+            if (this.orientation === "vertical") {
+                tx = d.width / 2;
+                ty = d.height + 4;
+            } else {
+                tx = d.width + 4;
+                ty = d.height / 2;
+            }
+            g.attr("transform", `translate(${tx}, ${ty})`);
+
+            // Style circle
+            g.select<SVGCircleElement>("circle.orgchart__node-toggle-bg")
+                .attr("r", 9)
+                .attr("fill", "#ffffff")
+                .attr("stroke", "var(--org-link-color)")
+                .attr("stroke-width", 1.2);
+
+            // Horizontal line (always visible)
+            g.select<SVGLineElement>("line.orgchart__toggle-line-h")
+                .attr("x1", -5).attr("y1", 0)
+                .attr("x2", 5).attr("y2", 0)
+                .attr("stroke", "var(--org-link-color)")
+                .attr("stroke-width", 1.6)
+                .attr("stroke-linecap", "round");
+
+            // Vertical line (only for '+')
+            const showPlus = d.isCollapsed;
+            g.select<SVGLineElement>("line.orgchart__toggle-line-v")
+                .attr("x1", 0).attr("y1", -5)
+                .attr("x2", 0).attr("y2", 5)
+                .attr("stroke", "var(--org-link-color)")
+                .attr("stroke-width", 1.6)
+                .attr("stroke-linecap", "round")
+                .style("display", showPlus ? "inline" : "none");
         });
     }
 
     private linkPath(link: RenderLink): string {
-        const source = link.source;
-        const target = link.target;
+        const s = link.source, t = link.target;
         if (this.orientation === "vertical") {
-            const sx = source.centerX;
-            const sy = source.y + source.height;
-            const tx = target.centerX;
-            const ty = target.y;
+            const sx = s.centerX, sy = s.y + s.height;
+            const tx = t.centerX, ty = t.y;
             const midY = sy + (ty - sy) / 2;
             return `M${sx},${sy} C${sx},${midY} ${tx},${midY} ${tx},${ty}`;
         }
-
-        const sx = source.x + source.width;
-        const sy = source.centerY;
-        const tx = target.x;
-        const ty = target.centerY;
+        const sx = s.x + s.width, sy = s.centerY;
+        const tx = t.x, ty = t.centerY;
         const midX = sx + (tx - sx) / 2;
         return `M${sx},${sy} C${midX},${sy} ${midX},${ty} ${tx},${ty}`;
     }
+
+    // ================= Interactions / zoom / selection =================
 
     private handleNodeClick(event: MouseEvent, node: RenderNode): void {
         const multiSelect = event.ctrlKey || event.metaKey;
@@ -1046,13 +900,8 @@ export class Visual implements IVisual {
             .then((ids) => {
                 this.selectedKeys = new Set(ids.map((id) => (id as VisualSelectionId).getKey()));
                 this.updateSelectionVisuals();
-                
-                // Apply highlighting to the selected node path
-                if (ids.length > 0) {
-                    this.highlightPath(node.payload.id);
-                } else {
-                    this.clearHighlights();
-                }
+                if (ids.length > 0) this.highlightPath(node.payload.id);
+                else this.clearHighlights();
             })
             .catch(() => undefined);
         event.preventDefault();
@@ -1075,31 +924,22 @@ export class Visual implements IVisual {
     }
 
     private collapseAll(): void {
-        if (!this.nodesById.size) {
-            return;
-        }
+        if (!this.nodesById.size) return;
         this.collapsedNodes = new Set(Array.from(this.nodesById.keys()));
         this.render();
     }
 
     private toggleNodeCollapse(nodeId: string): void {
-        if (this.collapsedNodes.has(nodeId)) {
-            this.collapsedNodes.delete(nodeId);
-        } else {
-            this.collapsedNodes.add(nodeId);
-        }
+        if (this.collapsedNodes.has(nodeId)) this.collapsedNodes.delete(nodeId);
+        else this.collapsedNodes.add(nodeId);
         this.render();
     }
-
-
 
     private ensureNodeVisible(nodeId: string): void {
         const visited = new Set<string>();
         let current = this.nodesById.get(nodeId);
         while (current && current.payload) {
-            if (visited.has(current.id)) {
-                break;
-            }
+            if (visited.has(current.id)) break;
             visited.add(current.id);
             this.collapsedNodes.delete(current.id);
             const parentId = current.payload.parentId;
@@ -1108,26 +948,16 @@ export class Visual implements IVisual {
     }
 
     private clampNumber(value: number | undefined, min: number, max: number, fallback: number): number {
-        if (typeof value !== "number" || Number.isNaN(value)) {
-            return fallback;
-        }
-        if (value < min) {
-            return min;
-        }
-        if (value > max) {
-            return max;
-        }
+        if (typeof value !== "number" || Number.isNaN(value)) return fallback;
+        if (value < min) return min;
+        if (value > max) return max;
         return value;
     }
 
     private focusOnNode(nodeId: string): void {
-        if (!this.allowZoom) {
-            return;
-        }
+        if (!this.allowZoom) return;
         const position = this.nodePositions.get(nodeId);
-        if (!position) {
-            return;
-        }
+        if (!position) return;
         const width = Math.max(this.viewport.width, 1);
         const height = Math.max(this.viewport.height, 1);
         const nodeWidth = position.width + 120;
@@ -1136,53 +966,39 @@ export class Visual implements IVisual {
         const translateX = width / 2 - position.absCenterX * scale;
         const translateY = height / 2 - position.absCenterY * scale;
         const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
-        this.svg.transition().duration(480).call(this.zoomBehavior.transform, transform);
+        this.svg.transition().duration(0).call(this.zoomBehavior.transform, transform);
     }
 
     private fitToViewport(): void {
-        if (!this.allowZoom || !this.layoutBounds) {
-            return;
-        }
-        const bounds = this.layoutBounds;
+        if (!this.allowZoom || !this.layoutBounds) return;
+        const b = this.layoutBounds;
         const width = Math.max(this.viewport.width, 1);
         const height = Math.max(this.viewport.height, 1);
-        const contentWidth = bounds.maxX - bounds.minX + bounds.padding * 2;
-        const contentHeight = bounds.maxY - bounds.minY + bounds.padding * 2;
+        const contentWidth = b.maxX - b.minX + b.padding * 2;
+        const contentHeight = b.maxY - b.minY + b.padding * 2;
         const scale = Math.min(width / contentWidth, height / contentHeight);
         const translateX = (width - contentWidth * scale) / 2;
         const translateY = (height - contentHeight * scale) / 2;
         const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
-        this.svg.transition().duration(400).call(this.zoomBehavior.transform, transform);
+        this.svg.transition().duration(0).call(this.zoomBehavior.transform, transform);
     }
 
     private resetZoom(): void {
-        if (!this.allowZoom) {
-            return;
-        }
-        this.svg.transition().duration(300).call(this.zoomBehavior.transform, d3.zoomIdentity);
+        if (!this.allowZoom) return;
+        this.svg.transition().duration(0).call(this.zoomBehavior.transform, d3.zoomIdentity);
     }
 
     private onZoom(event: d3.D3ZoomEvent<SVGSVGElement, unknown>): void {
-        if (!this.allowZoom) {
-            return;
-        }
+        if (!this.allowZoom) return;
         this.currentTransform = event.transform;
         this.zoomRoot.attr("transform", event.transform.toString());
     }
 
     private updateHighlights(dataView?: DataView): void {
-        if (!dataView || !dataView.table) {
-            return;
-        }
+        if (!dataView || !dataView.table) return;
 
-        // Clear existing highlights
-        this.nodesById.forEach((node) => {
-            if (node.payload) {
-                node.payload.highlight = false;
-            }
-        });
+        this.nodesById.forEach((node) => { if (node.payload) node.payload.highlight = false; });
 
-        // Check for cross-highlighting from other visuals
         const selections = this.selectionManager.getSelectionIds();
         if (selections && selections.length > 0) {
             selections.forEach((selection) => {
@@ -1192,13 +1008,11 @@ export class Visual implements IVisual {
                     if (node && node.payload) {
                         node.payload.highlight = true;
                         this.ensureNodeVisible(nodeId);
-                        // Highlight path to root
                         this.highlightPath(nodeId);
                     }
                 }
             });
         } else {
-            // Clear highlights when no selections
             this.clearHighlights();
         }
     }
@@ -1206,35 +1020,31 @@ export class Visual implements IVisual {
     private getPathToRoot(nodeId: string): string[] {
         const path: string[] = [];
         let current = this.nodesById.get(nodeId);
-        
         while (current && current.payload) {
             path.push(current.id);
             const parentId = current.payload.parentId;
             current = parentId ? this.nodesById.get(parentId) : undefined;
         }
-        
         return path;
     }
 
     private highlightPath(nodeId: string): void {
         const pathIds = this.getPathToRoot(nodeId);
-        
-        // Update visual state for nodes
+
         this.nodesGroup.selectAll<SVGGElement, RenderNode>("g.orgchart__node")
             .classed("is-dimmed", (d) => !pathIds.includes(d.payload.id))
             .classed("is-highlighted", (d) => pathIds.includes(d.payload.id));
 
-        // Update visual state for links
         this.linksGroup.selectAll<SVGPathElement, RenderLink>("path.orgchart__link")
             .classed("is-dimmed", (d) => {
-                const sourceInPath = pathIds.includes(d.source.payload.id);
-                const targetInPath = pathIds.includes(d.target.payload.id);
-                return !(sourceInPath && targetInPath);
+                const s = pathIds.includes(d.source.payload.id);
+                const t = pathIds.includes(d.target.payload.id);
+                return !(s && t);
             })
             .classed("is-highlighted", (d) => {
-                const sourceInPath = pathIds.includes(d.source.payload.id);
-                const targetInPath = pathIds.includes(d.target.payload.id);
-                return sourceInPath && targetInPath;
+                const s = pathIds.includes(d.source.payload.id);
+                const t = pathIds.includes(d.target.payload.id);
+                return s && t;
             });
     }
 
@@ -1249,37 +1059,25 @@ export class Visual implements IVisual {
     }
 
     private toKey(value: PrimitiveValue): string | undefined {
-        if (value == null || value === "") {
-            return undefined;
-        }
+        if (value == null || value === "") return undefined;
         return String(value).trim();
     }
 
     private toText(value: PrimitiveValue): string | undefined {
-        if (value == null || value === "") {
-            return undefined;
-        }
+        if (value == null || value === "") return undefined;
         return String(value).trim();
     }
 
-    private formatMetric(value: PrimitiveValue, column: DataViewMetadataColumn): string | undefined {
-        if (value == null || value === "") {
-            return undefined;
-        }
-        if (typeof value === "number") {
-            return value.toLocaleString();
-        }
+    private formatMetric(value: PrimitiveValue, _column: DataViewMetadataColumn): string | undefined {
+        if (value == null || value === "") return undefined;
+        if (typeof value === "number") return value.toLocaleString();
         return String(value);
     }
 
     private toInitials(name: string): string {
-        if (!name) {
-            return "";
-        }
+        if (!name) return "";
         const words = name.trim().split(/\s+/);
-        if (words.length === 1) {
-            return words[0].charAt(0).toUpperCase();
-        }
+        if (words.length === 1) return words[0].charAt(0).toUpperCase();
         return (words[0].charAt(0) + words[words.length - 1].charAt(0)).toUpperCase();
     }
 }
