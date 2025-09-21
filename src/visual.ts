@@ -132,6 +132,7 @@ export class Visual implements IVisual {
     private nameToNodeId: Map<string, string> = new Map();
 
     private emptyState: HTMLDivElement;
+    private footer: HTMLDivElement;
 
     // init flags
     private didInitialAutoCollapse = false;
@@ -199,6 +200,27 @@ export class Visual implements IVisual {
         this.emptyState.textContent = "Add employee and manager fields to build the organisation chart.";
         this.canvas.appendChild(this.emptyState);
 
+        // ===== Footer =====
+        this.footer = document.createElement("div");
+        this.footer.className = "orgchart__footer";
+        // Securely build the footer content without innerHTML
+        this.footer.appendChild(document.createTextNode("A Custom PBI Visual - Made with "));
+        const heart = document.createElement("span");
+        heart.textContent = "♥";
+        heart.style.color = "red";
+        heart.style.fontSize = "1.2em";
+        this.footer.appendChild(heart);
+        this.footer.appendChild(document.createTextNode(" by WWO @ Groveway-2025"));
+        Object.assign(this.footer.style, {
+            position: "absolute",
+            bottom: "2px",
+            right: "12px",
+            fontSize: "10px",
+            color: "#94a3b8", // same as --org-link-color
+            zIndex: "10"
+        } as CSSStyleDeclaration);
+        this.root.appendChild(this.footer);
+
         this.buildToolbar();
         this.updateToolbarRailState();
 
@@ -216,15 +238,15 @@ export class Visual implements IVisual {
         const transformResult = this.transform(dataView);
         this.fullTree = transformResult.tree;
         this.nodesById = transformResult.nodesById;
-if (!this.fullTree) {
-    // clear scene and show empty state
-    this.linksGroup.selectAll("path").remove();
-    this.nodesGroup.selectAll("g").remove();
-    if (this.emptyState) this.emptyState.style.display = "flex";
-    // reset the initial-fit flag so we will fit when data becomes complete
-    this.didInitialFit = false;
-    return;
-}        
+        if (!this.fullTree) {
+            // clear scene and show empty state
+            this.linksGroup.selectAll("path").remove();
+            this.nodesGroup.selectAll("g").remove();
+            if (this.emptyState) this.emptyState.style.display = "flex";
+            // reset the initial-fit flag so we will fit when data becomes complete
+            this.didInitialFit = false;
+            return;
+        }
         this.pruneCollapsedNodes();
 
         // Default: only levels 1 & 2 expanded (parents at depth==2 collapsed)
@@ -240,6 +262,7 @@ if (!this.fullTree) {
             this.fitToViewport(0);
             this.didInitialFit = true;
         }
+        this.fitToViewport(0);
     }
 
     public getFormattingModel(): powerbi.visuals.FormattingModel {
@@ -614,7 +637,10 @@ if (!this.fullTree) {
 
         const root = d3.hierarchy<ChartNode>(visibleTree!, (node) => node.children);
         const treeLayout = d3.tree<ChartNode>()
-            .nodeSize([nodeWidth + horizontalSpacing, nodeHeight + verticalSpacing])
+            .nodeSize(this.orientation === "vertical"
+                ? [nodeWidth + horizontalSpacing, nodeHeight + verticalSpacing]
+                : [nodeHeight + verticalSpacing, nodeWidth + horizontalSpacing]
+            )
             .separation((a, b) => (a.parent === b.parent ? 1 : 1.3));
         const layoutRoot = treeLayout(root);
 
@@ -696,13 +722,13 @@ if (!this.fullTree) {
             .data(renderNodes, (d: RenderNode) => d.payload.id);
 
         // ENTER — prevent paint until fully placed to avoid “top pop”
-const nodeEnter = nodeSelection.enter()
-  .append("g")
-  .attr("class", "orgchart__node")
-  .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
-  // hard kill any intermediate paint
-  .style("display", "none")
-  .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
+        const nodeEnter = nodeSelection.enter()
+            .append("g")
+            .attr("class", "orgchart__node")
+            .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+            // hard kill any intermediate paint
+            .style("display", "none")
+            .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
         // seed new nodes at parent connector
         nodeEnter.attr("transform", (d) => {
             const parentId = d.node.parent?.data.payload?.id;
@@ -779,23 +805,23 @@ const nodeEnter = nodeSelection.enter()
         this.updateNodeContent(nodeSelection.merge(nodeEnter));
         this.updateNodeToggles(nodeSelection.merge(nodeEnter));
 
-// UPDATE + ENTER
-const merged = nodeSelection.merge(nodeEnter)
-  .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
-  .classed("has-children", (d) => d.hasChildren)
-  .classed("is-collapsed", (d) => d.isCollapsed)
-  .classed("is-highlighted", (d) => !!d.payload.highlight)
-  .classed("is-selected", (d) => this.selectedKeys.has(d.payload.identity.getKey()));
+        // UPDATE + ENTER
+        const merged = nodeSelection.merge(nodeEnter)
+            .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+            .classed("has-children", (d) => d.hasChildren)
+            .classed("is-collapsed", (d) => d.isCollapsed)
+            .classed("is-highlighted", (d) => !!d.payload.highlight)
+            .classed("is-selected", (d) => this.selectedKeys.has(d.payload.identity.getKey()));
 
-// DOUBLE rAF REVEAL — guarantees transforms/children are committed before first paint
-requestAnimationFrame(() => {
-  requestAnimationFrame(() => {
-    nodeEnter
-      .style("display", "inline")    // reveal atomically, no transition
-      .style("opacity", "1")         // (optional) if you had opacity styles elsewhere
-      .style("visibility", "visible");
-  });
-});
+        // DOUBLE rAF REVEAL — guarantees transforms/children are committed before first paint
+        requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+                nodeEnter
+                    .style("display", "inline")    // reveal atomically, no transition
+                    .style("opacity", "1")         // (optional) if you had opacity styles elsewhere
+                    .style("visibility", "visible");
+            });
+        });
         nodeSelection.exit().remove();
 
         if (this.selectedKeys.size > 0) {
@@ -974,17 +1000,20 @@ requestAnimationFrame(() => {
     private toggleOrientation(): void {
         this.orientation = this.orientation === "vertical" ? "horizontal" : "vertical";
         this.render();
+        this.fitToViewport(100)
     }
 
     private expandAll(): void {
         this.collapsedNodes.clear();
         this.render();
+        this.fitToViewport(100)
     }
 
     private collapseAll(): void {
         if (!this.nodesById.size) return;
         this.collapsedNodes = new Set(Array.from(this.nodesById.keys()));
         this.render();
+        this.fitToViewport(100)
     }
 
     // Expand/collapse with anchor preservation; expand ONE level
