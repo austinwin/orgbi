@@ -26,7 +26,7 @@ import ISelectionManager = powerbi.extensibility.ISelectionManager;
 interface FieldValue {
     label: string;
     value: string;
-    role: "detail" | "metric" | "department" | "title";
+    role: "detail" | "metric";
 }
 
 interface OrgChartDatum {
@@ -35,7 +35,7 @@ interface OrgChartDatum {
     parentId?: string;
     displayName: string;
     title?: string;
-    department?: string;
+    division?: string;          // renamed from “department” for clarity in the UI
     avatarUrl?: string;
     details: FieldValue[];
     metrics: FieldValue[];
@@ -216,6 +216,15 @@ export class Visual implements IVisual {
         const transformResult = this.transform(dataView);
         this.fullTree = transformResult.tree;
         this.nodesById = transformResult.nodesById;
+if (!this.fullTree) {
+    // clear scene and show empty state
+    this.linksGroup.selectAll("path").remove();
+    this.nodesGroup.selectAll("g").remove();
+    if (this.emptyState) this.emptyState.style.display = "flex";
+    // reset the initial-fit flag so we will fit when data becomes complete
+    this.didInitialFit = false;
+    return;
+}        
         this.pruneCollapsedNodes();
 
         // Default: only levels 1 & 2 expanded (parents at depth==2 collapsed)
@@ -257,7 +266,7 @@ export class Visual implements IVisual {
             { title: "Expand all nodes", icon: "expand", onClick: () => this.expandAll() },
             { title: "Collapse to root", icon: "collapse", onClick: () => this.collapseAll() },
             { title: "Fit to view", icon: "fit", onClick: () => this.fitToViewport(100) },
-            { title: "Reset zoom/pan", icon: "reset", onClick: () => this.resetZoom() }
+            //{ title: "Reset zoom/pan", icon: "reset", onClick: () => this.resetZoom() }
         ];
 
         buttons.forEach((config) => {
@@ -337,10 +346,7 @@ export class Visual implements IVisual {
             return element;
         };
 
-        const append = <T extends SVGElement>(element: T): T => {
-            svg.appendChild(element);
-            return element;
-        };
+        const append = <T extends SVGElement>(element: T): T => { svg.appendChild(element); return element; };
 
         const createLine = (x1: number, y1: number, x2: number, y2: number): SVGLineElement => {
             const line = document.createElementNS(svgNamespace, "line");
@@ -472,6 +478,10 @@ export class Visual implements IVisual {
         if (roleIndexes.employee === undefined) {
             return { tree: null, nodesById: new Map(), warnings: ["Employee Id field is required"] };
         }
+        // NEW: Manager is also mandatory to start the chart
+        if (roleIndexes.manager === undefined) {
+            return { tree: null, nodesById: new Map(), warnings: ["Manager Id field is required"] };
+        }
 
         const detailIndexes: number[] = [];
         const metricIndexes: number[] = [];
@@ -495,7 +505,7 @@ export class Visual implements IVisual {
 
             const displayName = roleIndexes.name !== undefined ? this.toText(row[roleIndexes.name]) : undefined;
             const title = roleIndexes.title !== undefined ? this.toText(row[roleIndexes.title]) : undefined;
-            const department = roleIndexes.department !== undefined ? this.toText(row[roleIndexes.department]) : undefined;
+            const division = roleIndexes.department !== undefined ? this.toText(row[roleIndexes.department]) : undefined;
             const avatarUrl = roleIndexes.image !== undefined ? this.toText(row[roleIndexes.image]) : undefined;
 
             const details: FieldValue[] = [];
@@ -510,9 +520,6 @@ export class Visual implements IVisual {
                 if (value) metrics.push({ label: columns[index].displayName, value, role: "metric" });
             });
 
-            if (department) details.unshift({ label: "", value: department, role: "department" });
-            if (title) details.unshift({ label: "", value: title, role: "title" });
-
             const identity = this.host.createSelectionIdBuilder()
                 .withTable(table, rowIndex)
                 .createSelectionId() as VisualSelectionId;
@@ -523,7 +530,7 @@ export class Visual implements IVisual {
                 parentId,
                 displayName: displayName || employeeId,
                 title,
-                department,
+                division,
                 avatarUrl,
                 details,
                 metrics
@@ -569,9 +576,7 @@ export class Visual implements IVisual {
         if (!this.fullTree) { this.collapsedNodes.clear(); return; }
         const validIds = new Set<string>();
         this.nodesById.forEach((_node, id) => validIds.add(id));
-        Array.from(this.collapsedNodes).forEach((id) => {
-            if (!validIds.has(id)) this.collapsedNodes.delete(id);
-        });
+        Array.from(this.collapsedNodes).forEach((id) => { if (!validIds.has(id)) this.collapsedNodes.delete(id); });
     }
 
     // Collapse parents at depth == maxVisibleDepth
@@ -690,14 +695,15 @@ export class Visual implements IVisual {
         const nodeSelection = this.nodesGroup.selectAll<SVGGElement, RenderNode>("g.orgchart__node")
             .data(renderNodes, (d: RenderNode) => d.payload.id);
 
-        // ENTER — prevent paint until fully placed to avoid “top-left pop”
-        const nodeEnter = nodeSelection.enter()
-            .append("g")
-            .attr("class", "orgchart__node")
-            .style("display", "none") // key: no intermediate frame
-            .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
-
-        // seed new nodes at their parent's connector position (if known)
+        // ENTER — prevent paint until fully placed to avoid “top pop”
+const nodeEnter = nodeSelection.enter()
+  .append("g")
+  .attr("class", "orgchart__node")
+  .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+  // hard kill any intermediate paint
+  .style("display", "none")
+  .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
+        // seed new nodes at parent connector
         nodeEnter.attr("transform", (d) => {
             const parentId = d.node.parent?.data.payload?.id;
             if (parentId) {
@@ -719,7 +725,7 @@ export class Visual implements IVisual {
             .attr("rx", this.clampNumber(this.formattingSettings.card.borderRadius.value, 0, 50, 18))
             .attr("ry", this.clampNumber(this.formattingSettings.card.borderRadius.value, 0, 50, 18));
 
-        // card content
+        // card content (Name + Title + Division on separate lines)
         nodeEnter.each((d, index, groups) => {
             const group = groups[index];
             const foreignObject = d3.select(group)
@@ -733,10 +739,12 @@ export class Visual implements IVisual {
                 .attr("data-card-align", this.formattingSettings.card.cardAlignment.value?.value || "start");
 
             const header = card.append("div").attr("class", "orgcard__header");
-            const avatar = header.append("div").attr("class", "orgcard__avatar").attr("data-id", d.payload.id);
+            header.append("div").attr("class", "orgcard__avatar").attr("data-id", d.payload.id);
+
             const titles = header.append("div").attr("class", "orgcard__titles");
-            titles.append("div").attr("class", "orgcard__name");
-            titles.append("div").attr("class", "orgcard__title");
+            titles.append("div").attr("class", "orgcard__name");      // line 1
+            titles.append("div").attr("class", "orgcard__title");     // line 2
+            titles.append("div").attr("class", "orgcard__division");  // line 3
 
             card.append("div").attr("class", "orgcard__details");
             card.append("div").attr("class", "orgcard__metrics");
@@ -771,15 +779,23 @@ export class Visual implements IVisual {
         this.updateNodeContent(nodeSelection.merge(nodeEnter));
         this.updateNodeToggles(nodeSelection.merge(nodeEnter));
 
-        // Final placement + show (no animation -> no flicker)
-        nodeSelection.merge(nodeEnter)
-            .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
-            .style("display", "inline")
-            .classed("has-children", (d) => d.hasChildren)
-            .classed("is-collapsed", (d) => d.isCollapsed)
-            .classed("is-highlighted", (d) => !!d.payload.highlight)
-            .classed("is-selected", (d) => this.selectedKeys.has(d.payload.identity.getKey()));
+// UPDATE + ENTER
+const merged = nodeSelection.merge(nodeEnter)
+  .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
+  .classed("has-children", (d) => d.hasChildren)
+  .classed("is-collapsed", (d) => d.isCollapsed)
+  .classed("is-highlighted", (d) => !!d.payload.highlight)
+  .classed("is-selected", (d) => this.selectedKeys.has(d.payload.identity.getKey()));
 
+// DOUBLE rAF REVEAL — guarantees transforms/children are committed before first paint
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    nodeEnter
+      .style("display", "inline")    // reveal atomically, no transition
+      .style("opacity", "1")         // (optional) if you had opacity styles elsewhere
+      .style("visibility", "visible");
+  });
+});
         nodeSelection.exit().remove();
 
         if (this.selectedKeys.size > 0) {
@@ -804,13 +820,15 @@ export class Visual implements IVisual {
             const avatar = card.select<HTMLDivElement>(".orgcard__avatar");
             const nameEl = card.select<HTMLDivElement>(".orgcard__name");
             const titleEl = card.select<HTMLDivElement>(".orgcard__title");
+            const divisionEl = card.select<HTMLDivElement>(".orgcard__division");
             const detailsEl = card.select<HTMLDivElement>(".orgcard__details");
             const metricsEl = card.select<HTMLDivElement>(".orgcard__metrics");
 
             const payload = d.payload;
 
             nameEl.text(payload.displayName);
-            titleEl.text(payload.title || payload.department || "");
+            titleEl.text(payload.title || "");           // line 2
+            divisionEl.text(payload.division || "");     // line 3
 
             const showImages = this.formattingSettings.card.showImage.value;
             if (showImages && payload.avatarUrl) {
@@ -824,11 +842,12 @@ export class Visual implements IVisual {
                 avatar.text(initials);
             }
 
+            // details – exclude title/division here (we already show them as separate lines)
             const detailNode = detailsEl.node();
             if (detailNode) {
                 while (detailNode.firstChild) detailNode.removeChild(detailNode.firstChild);
                 payload.details.forEach((item) => {
-                    if (!item.value || item.role === "title" || item.role === "department") return;
+                    if (!item.value) return;
                     const line = detailNode.ownerDocument!.createElement("div");
                     line.className = "orgcard__detail-line";
                     if (item.label) {
@@ -968,7 +987,7 @@ export class Visual implements IVisual {
         this.render();
     }
 
-    // Expand/collapse with anchor preservation; expand only ONE level
+    // Expand/collapse with anchor preservation; expand ONE level
     private toggleNodeCollapseAnchoredOneLevel(nodeId: string): void {
         const beforePos = this.nodePositions.get(nodeId);
         const wasCollapsed = this.collapsedNodes.has(nodeId);
@@ -991,17 +1010,11 @@ export class Visual implements IVisual {
         }
     }
 
-    // Only reveal the direct children; keep grandchildren collapsed
+    // Only reveal direct children; keep grandchildren collapsed
     private expandOneLevel(nodeId: string): void {
-        // remove this node from collapsed
         this.collapsedNodes.delete(nodeId);
-        // add all direct children to collapsed so they appear but their children remain hidden
         const node = this.nodesById.get(nodeId);
-        if (node) {
-            node.children.forEach((c) => {
-                if (c.payload) this.collapsedNodes.add(c.payload.id);
-            });
-        }
+        if (node) node.children.forEach((c) => { if (c.payload) this.collapsedNodes.add(c.payload.id); });
     }
 
     private clampNumber(value: number | undefined, min: number, max: number, fallback: number): number {
