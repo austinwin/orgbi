@@ -236,7 +236,7 @@
 
   &:hover .orgcard {
     transform: translateY(-2px);
-    box-shadow: 0 12px 24px rgba(15, 23, 42, 0.16);
+    box-shadow: none; // rely on .orgchart__node-bg drop-shadow only
   }
 
   &:hover .orgchart__node-bg {
@@ -293,7 +293,8 @@
   flex-direction: column;
   justify-content: center;
   text-align: var(--card-align, start);
-  
+    border-radius: var(--org-border-radius, 18px); // match SVG rect corners
+  background: transparent;                       // avoid any fill
   &[data-card-align="center"] {
     text-align: center;
   }
