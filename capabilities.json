@@ -47,6 +47,12 @@
             "name": "metric",
             "kind": "Measure",
             "description": "Numeric values rendered as compact badges on each card."
+        },
+        {
+            "displayName": "Tooltips",
+            "name": "tooltips",
+            "kind": "Grouping",
+            "description": "Fields displayed in tooltip on hover."
         }
     ],
     "objects": {
@@ -68,6 +74,20 @@
                 "verticalSpacing": {
                     "displayName": "Vertical spacing",
                     "type": { "numeric": true }
+                },
+                "initialExpandedLevels": {
+                    "displayName": "Initial expanded levels",
+                    "type": {
+                        "enumeration": [
+                            { "displayName": "None", "value": "0" },
+                            { "displayName": "1", "value": "1" },
+                            { "displayName": "2", "value": "2" },
+                            { "displayName": "3", "value": "3" },
+                            { "displayName": "4", "value": "4" },
+                            { "displayName": "5", "value": "5" },
+                            { "displayName": "6", "value": "6" }
+                        ]
+                    }
                 },
                 "enableZoom": {
                     "displayName": "Enable zoom & pan",
@@ -173,7 +193,8 @@
                         { "for": { "in": "department" } },
                         { "for": { "in": "imageUrl" } },
                         { "for": { "in": "details" } },
-                        { "for": { "in": "metric" } }
+                        { "for": { "in": "metric" } },
+                        { "for": { "in": "tooltips" } }
                     ]
                 }
             },
@@ -186,7 +207,8 @@
                     "department": { "max": 1 },
                     "imageUrl": { "max": 1 },
                     "details": { "max": 5 },
-                    "metric": { "max": 6 }
+                    "metric": { "max": 6 },
+                    "tooltips": { "max": 20 }
                 }
             ]
         }
