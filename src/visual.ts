@@ -9,7 +9,15 @@ import * as d3 from "d3";
 import "./../style/visual.less";
 import { FormattingSettingsService } from "powerbi-visuals-utils-formattingmodel";
 import { VisualFormattingSettingsModel } from "./settings";
+// NEW: tooltip utils
+import {
+  createTooltipServiceWrapper,
+  TooltipEventArgs,
+  ITooltipServiceWrapper
+} from "powerbi-visuals-utils-tooltiputils";
 
+// Type from the API namespace
+type VisualTooltipDataItem = powerbi.extensibility.VisualTooltipDataItem;
 import VisualConstructorOptions = powerbi.extensibility.visual.VisualConstructorOptions;
 import VisualUpdateOptions = powerbi.extensibility.visual.VisualUpdateOptions;
 import IVisual = powerbi.extensibility.visual.IVisual;
@@ -35,11 +43,13 @@ interface OrgChartDatum {
     parentId?: string;
     displayName: string;
     title?: string;
-    division?: string;          // renamed from “department” for clarity in the UI
+    division?: string;          // renamed from "department" for clarity in the UI
     avatarUrl?: string;
     details: FieldValue[];
     metrics: FieldValue[];
     highlight?: boolean;
+    // NEW: standard tooltip items for this row
+    tooltipItems?: VisualTooltipDataItem[];
 }
 
 interface ChartNode {
@@ -87,16 +97,27 @@ interface TransformResult {
     warnings: string[];
 }
 
+// NEW: Search suggestion item interface
+interface SearchSuggestion {
+    id: string;
+    text: string;
+    nodeId: string;
+}
+
 type Orientation = "vertical" | "horizontal";
-type ToolbarIcon = "menu" | "layout" | "expand" | "collapse" | "fit" | "reset";
+type ToolbarIcon = "menu" | "layout" | "expand" | "collapse" | "fullscreen" | "reset" | "search";
 
 const DEFAULT_LAYOUT: Orientation = "vertical";
-const ZOOM_MIN = 0.25;
-const ZOOM_MAX = 4;
+const ZOOM_MIN = 0.01;
+const ZOOM_MAX = 100;
 
 export class Visual implements IVisual {
     private host: IVisualHost;
     private selectionManager: ISelectionManager;
+    // NEW: tooltip service wrapper
+    private tooltipServiceWrapper: ITooltipServiceWrapper;
+    // NEW: whether any tooltip fields are bound
+    private hasTooltipFields: boolean = false;
     private formattingSettingsService: FormattingSettingsService;
     private formattingSettings: VisualFormattingSettingsModel;
 
@@ -107,6 +128,15 @@ export class Visual implements IVisual {
     private toolbarRail: HTMLDivElement;
     private toolbarToggle: HTMLButtonElement;
     private controlsVisible: boolean = true;
+
+    // NEW: Search elements
+    private searchToggle: HTMLButtonElement;
+    private searchContainer: HTMLDivElement;
+    private searchInput: HTMLInputElement;
+    private searchResults: HTMLDivElement;
+    private searchVisible: boolean = false;
+    private searchSuggestions: SearchSuggestion[] = [];
+    private selectedSuggestionIndex: number = -1;
 
     private canvas: HTMLDivElement;
     private svgElement: SVGSVGElement;
@@ -142,6 +172,8 @@ export class Visual implements IVisual {
         this.host = options.host;
         this.selectionManager = this.host.createSelectionManager();
         this.formattingSettingsService = new FormattingSettingsService();
+        // NEW: create tooltip wrapper
+        this.tooltipServiceWrapper = createTooltipServiceWrapper(this.host.tooltipService, options.element);
 
         this.root = document.createElement("div");
         this.root.className = "orgchart-visual";
@@ -163,6 +195,68 @@ export class Visual implements IVisual {
             lineHeight: "0"
         } as CSSStyleDeclaration);
         this.toolbar.appendChild(this.toolbarRail);
+
+        // NEW: Create search container
+        this.searchContainer = document.createElement("div");
+        this.searchContainer.className = "orgchart__search-container";
+        Object.assign(this.searchContainer.style, {
+            position: "absolute",
+            top: "30px",
+            left: "35px",
+            display: "none",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            zIndex: "1000",
+            background: "white",
+            borderRadius: "8px",
+            boxShadow: "0 4px 12px rgba(15,23,42,0.15)",
+            padding: "6px",
+            marginTop: "2px",
+            width: "220px"
+        } as CSSStyleDeclaration);
+        this.toolbar.appendChild(this.searchContainer);
+
+        // NEW: Create search input
+        this.searchInput = document.createElement("input");
+        this.searchInput.type = "text";
+        this.searchInput.className = "orgchart__search-input";
+        this.searchInput.placeholder = "Search by name or ID...";
+        Object.assign(this.searchInput.style, {
+            width: "100%",
+            padding: "6px 8px",
+            border: "1px solid #cbd5e1",
+            borderRadius: "6px",
+            fontSize: "14px",
+            zIndex: "1001",
+            pointerEvents: "auto",
+            cursor: "text",
+            boxSizing: "border-box", // <-- add this
+            outline: "none"          // <-- add this to remove thick blue outline            
+        } as CSSStyleDeclaration);
+        this.searchInput.addEventListener("focus", () => {
+            this.searchInput.style.border = "1.5px solid #2563eb"; // subtle blue border on focus
+        });
+        this.searchInput.addEventListener("blur", () => {
+            this.searchInput.style.border = "1px solid #cbd5e1"; // reset border on blur
+        });        
+        this.searchInput.addEventListener("mousedown", (e) => e.stopPropagation());
+        this.searchInput.addEventListener("click", () => this.searchInput.focus());        
+        this.searchContainer.appendChild(this.searchInput);
+
+        // NEW: Create search results dropdown
+        this.searchResults = document.createElement("div");
+        this.searchResults.className = "orgchart__search-results";
+        Object.assign(this.searchResults.style, {
+            width: "100%",
+            maxHeight: "200px",
+            overflowY: "auto",
+            marginTop: "4px",
+            display: "none",
+            zIndex: "1001",
+            pointerEvents: "auto",
+            cursor: "default"
+        } as CSSStyleDeclaration);
+        this.searchContainer.appendChild(this.searchResults);
 
         // ===== Canvas + SVG =====
         this.canvas = document.createElement("div");
@@ -223,8 +317,255 @@ export class Visual implements IVisual {
 
         this.buildToolbar();
         this.updateToolbarRailState();
+        
+        // NEW: Setup search event handlers
+        this.setupSearchHandlers();
 
         options.element.appendChild(this.root);
+    }
+
+    // NEW: Setup search event handlers
+    private setupSearchHandlers(): void {
+        // Search input events
+        this.searchInput.addEventListener("input", () => {
+            this.updateSearchSuggestions();
+        });
+        
+        this.searchInput.addEventListener("keydown", (e) => {
+            switch (e.key) {
+                case "ArrowDown":
+                    this.navigateSuggestion(1);
+                    e.preventDefault();
+                    break;
+                case "ArrowUp":
+                    this.navigateSuggestion(-1);
+                    e.preventDefault();
+                    break;
+                case "Enter":
+                    this.selectCurrentSuggestion();
+                    e.preventDefault();
+                    break;
+                case "Escape":
+                    this.toggleSearch(false);
+                    e.preventDefault();
+                    break;
+            }
+        });
+        
+        // Close search when clicking outside
+        document.addEventListener("click", (e) => {
+            if (this.searchVisible && 
+                !this.searchContainer.contains(e.target as Node) && 
+                !this.searchToggle.contains(e.target as Node)) {
+                this.toggleSearch(false);
+            }
+        });
+    }
+    
+    // NEW: Toggle search visibility
+    private toggleSearch(show?: boolean): void {
+        this.searchVisible = show !== undefined ? show : !this.searchVisible;
+        
+        if (this.searchVisible) {
+            this.searchContainer.style.display = "flex";
+            this.searchInput.value = "";
+            this.searchInput.focus();
+            this.searchResults.style.display = "none";
+            this.searchSuggestions = [];
+        } else {
+            this.searchContainer.style.display = "none";
+            this.searchResults.style.display = "none";
+        }
+        
+        // Update the search button state
+        if (this.searchToggle) {
+            this.searchToggle.setAttribute("aria-expanded", this.searchVisible ? "true" : "false");
+            this.searchToggle.classList.toggle("active", this.searchVisible);
+        }
+    }
+    
+    // NEW: Update search suggestions based on input
+    private updateSearchSuggestions(): void {
+        const query = this.searchInput.value.trim().toLowerCase();
+        
+        if (!query) {
+            this.searchResults.style.display = "none";
+            this.searchSuggestions = [];
+            return;
+        }
+        
+        // Find matching nodes (by ID or name)
+        this.searchSuggestions = [];
+        
+        this.nodesById.forEach((node) => {
+            if (!node.payload) return;
+            
+            const payload = node.payload;
+            const idMatch = payload.id.toLowerCase().includes(query);
+            const nameMatch = payload.displayName.toLowerCase().includes(query);
+            
+            if (idMatch || nameMatch) {
+                this.searchSuggestions.push({
+                    id: payload.identity.getKey(),
+                    text: `${payload.displayName}${payload.title ? ` - ${payload.title}` : ''}`,
+                    nodeId: payload.id
+                });
+            }
+        });
+        
+        // Sort suggestions by relevance (exact matches first, then startsWith, then includes)
+        this.searchSuggestions.sort((a, b) => {
+            const aName = a.text.toLowerCase();
+            const bName = b.text.toLowerCase();
+            const aId = a.nodeId.toLowerCase();
+            const bId = b.nodeId.toLowerCase();
+            
+            // Exact matches first
+            if (aName === query) return -1;
+            if (bName === query) return 1;
+            if (aId === query) return -1;
+            if (bId === query) return 1;
+            
+            // Then starts-with matches
+            if (aName.startsWith(query)) return -1;
+            if (bName.startsWith(query)) return 1;
+            if (aId.startsWith(query)) return -1;
+            if (bId.startsWith(query)) return 1;
+            
+            return 0;
+        });
+        
+        // Limit suggestions to 10
+        if (this.searchSuggestions.length > 10) {
+            this.searchSuggestions = this.searchSuggestions.slice(0, 10);
+        }
+        
+        this.renderSearchSuggestions();
+    }
+    
+    // NEW: Render the search suggestions dropdown
+    private renderSearchSuggestions(): void {
+        // Clear the results container
+        while (this.searchResults.firstChild) {
+            this.searchResults.removeChild(this.searchResults.firstChild);
+        }
+        
+        if (this.searchSuggestions.length === 0) {
+            this.searchResults.style.display = "none";
+            return;
+        }
+        
+        // Add each suggestion to the dropdown
+        this.searchSuggestions.forEach((suggestion, index) => {
+            const item = document.createElement("div");
+            item.className = "orgchart__search-item";
+            item.textContent = suggestion.text;
+            
+            Object.assign(item.style, {
+                padding: "6px 10px",
+                cursor: "pointer",
+                borderRadius: "4px",
+                fontSize: "13px"
+            } as CSSStyleDeclaration);
+            
+            // Highlight on hover
+            item.addEventListener("mouseover", () => {
+                this.selectedSuggestionIndex = index;
+                this.highlightSelectedSuggestion();
+            });
+            
+            // Select on click
+            item.addEventListener("click", () => {
+                this.selectedSuggestionIndex = index;
+                this.selectCurrentSuggestion();
+            });
+            
+            this.searchResults.appendChild(item);
+        });
+        
+        this.searchResults.style.display = "block";
+        this.selectedSuggestionIndex = -1;
+    }
+    
+    // NEW: Navigate through suggestions with keyboard
+    private navigateSuggestion(direction: number): void {
+        if (this.searchSuggestions.length === 0) return;
+        
+        this.selectedSuggestionIndex += direction;
+        
+        // Loop around
+        if (this.selectedSuggestionIndex < 0) {
+            this.selectedSuggestionIndex = this.searchSuggestions.length - 1;
+        } else if (this.selectedSuggestionIndex >= this.searchSuggestions.length) {
+            this.selectedSuggestionIndex = 0;
+        }
+        
+        this.highlightSelectedSuggestion();
+    }
+    
+    // NEW: Highlight the currently selected suggestion
+    private highlightSelectedSuggestion(): void {
+        const items = this.searchResults.querySelectorAll(".orgchart__search-item");
+        
+        items.forEach((item, index) => {
+            if (index === this.selectedSuggestionIndex) {
+                (item as HTMLElement).style.backgroundColor = "#e2e8f0";
+            } else {
+                (item as HTMLElement).style.backgroundColor = "";
+            }
+        });
+    }
+    
+    // NEW: Select the current suggestion
+    private selectCurrentSuggestion(): void {
+        if (this.selectedSuggestionIndex >= 0 && this.selectedSuggestionIndex < this.searchSuggestions.length) {
+            const selected = this.searchSuggestions[this.selectedSuggestionIndex];
+            this.selectSearchResult(selected);
+        } else if (this.searchSuggestions.length === 1) {
+            // If there's only one suggestion, select it even if not explicitly chosen
+            this.selectSearchResult(this.searchSuggestions[0]);
+        } else if (this.searchSuggestions.length > 0) {
+            // If input exactly matches a suggestion, select that one
+            const query = this.searchInput.value.trim().toLowerCase();
+            const exactMatch = this.searchSuggestions.find(
+                s => s.nodeId.toLowerCase() === query || s.text.toLowerCase() === query
+            );
+            
+            if (exactMatch) {
+                this.selectSearchResult(exactMatch);
+            }
+        }
+    }
+    
+    // NEW: Select and zoom to a search result
+    private selectSearchResult(result: SearchSuggestion): void {
+        const nodeId = result.nodeId;
+        const node = this.nodesById.get(nodeId);
+        
+        if (node && node.payload) {
+            // Ensure the node is visible (expand parents if needed)
+            this.ensureNodeVisible(nodeId);
+            
+            // Re-render to make sure the node is in the DOM
+            this.render();
+            
+            // Set selection
+            this.selectedKeys.clear();
+            this.selectedKeys.add(result.id);
+            this.updateSelectionVisuals();
+            this.highlightPath(nodeId);
+            
+            // Update PowerBI selection
+            this.selectionManager.select(node.payload.identity, false).catch(() => undefined);
+            
+            // Zoom to the node
+            setTimeout(() => {
+                this.focusOnNode(nodeId, 0.8);
+            }, 100);
+            
+            // Close the search
+            this.toggleSearch(false);
+        }
     }
 
     public update(options: VisualUpdateOptions): void {
@@ -249,9 +590,15 @@ export class Visual implements IVisual {
         }
         this.pruneCollapsedNodes();
 
-        // Default: only levels 1 & 2 expanded (parents at depth==2 collapsed)
+        // Default expand behavior driven by user setting
         if (this.fullTree && (!this.didInitialAutoCollapse || this.collapsedNodes.size === 0)) {
-            this.collapsedNodes = this.computeDefaultCollapsedSet(2);
+            const levels = this.getInitialExpandedLevels();
+            if (levels <= 0) {
+                // None => expand all
+                this.collapsedNodes.clear();
+            } else {
+                this.collapsedNodes = this.computeDefaultCollapsedSet(levels);
+            }
             this.didInitialAutoCollapse = true;
         }
 
@@ -283,12 +630,19 @@ export class Visual implements IVisual {
         this.toolbarToggle.classList.add("orgchart__toolbar-btn--toggle");
         this.toolbarRail.appendChild(this.toolbarToggle);
 
+        // NEW: Search button
+        this.searchToggle = this.createToolbarRailButton("search", "Search", () => {
+            this.toggleSearch();
+        }, 24, 1);
+        this.searchToggle.classList.add("orgchart__toolbar-btn--action");
+        this.toolbarRail.appendChild(this.searchToggle);
+
         // Actions
         const buttons: Array<{ title: string; icon: ToolbarIcon; onClick: () => void; }> = [
             { title: "Toggle vertical / horizontal", icon: "layout", onClick: () => this.toggleOrientation() },
             { title: "Expand all nodes", icon: "expand", onClick: () => this.expandAll() },
             { title: "Collapse to root", icon: "collapse", onClick: () => this.collapseAll() },
-            { title: "Fit to view", icon: "fit", onClick: () => this.fitToViewport(100) },
+            { title: "Fit to view", icon: "fullscreen", onClick: () => this.fitToViewport(100) },
             //{ title: "Reset zoom/pan", icon: "reset", onClick: () => this.resetZoom() }
         ];
 
@@ -419,8 +773,17 @@ export class Visual implements IVisual {
             case "layout": { createRect(4.5, 4, 7.5, 16); createRect(13.5, 8, 7.5, 12); break; }
             case "expand": { createCircle(12, 12, 8); createLine(12, 8.5, 12, 15.5); createLine(8.5, 12, 15.5, 12); break; }
             case "collapse": { createCircle(12, 12, 8); createLine(8.5, 12, 15.5, 12); break; }
-            case "fit": { createCircle(11, 11, 5.5); createLine(15, 15, 20, 20); break; }
+            case "fullscreen": {
+                // Four corners
+                createPolyline("3,9 3,3 9,3");
+                createPolyline("21,9 21,3 15,3");
+                createPolyline("3,15 3,21 9,21");
+                createPolyline("21,15 21,21 15,21");
+                break;
+            }
             case "reset": { createPath("M20 12a8 8 0 1 1-2.34-5.66"); createPolyline("20,6 20,12 14,12"); break; }
+            // NEW: Search icon
+            case "search": { createCircle(11, 11, 7); createLine(16, 16, 20, 20); break; }
         }
         return svg;
     }
@@ -508,12 +871,18 @@ export class Visual implements IVisual {
 
         const detailIndexes: number[] = [];
         const metricIndexes: number[] = [];
+        // NEW: collect tooltip role columns
+        const tooltipIndexes: number[] = [];
 
         columns.forEach((column, index) => {
             if (!column.roles) return;
             if (column.roles.details) detailIndexes.push(index);
             if (column.roles.metric) metricIndexes.push(index);
+            if (column.roles.tooltips) tooltipIndexes.push(index); // NEW
         });
+
+        // NEW: remember if any tooltip fields are present
+        this.hasTooltipFields = tooltipIndexes.length > 0;
 
         const nodes: OrgChartDatum[] = [];
         const nodesById: Map<string, ChartNode> = new Map();
@@ -543,6 +912,20 @@ export class Visual implements IVisual {
                 if (value) metrics.push({ label: columns[index].displayName, value, role: "metric" });
             });
 
+            // NEW: build tooltip items from "Tooltips" fields
+            const tooltipItems: VisualTooltipDataItem[] = [];
+            tooltipIndexes.forEach((index) => {
+                const col = columns[index];
+                const raw = row[index];
+                const valueStr = this.formatMetric(raw, col);
+                if (valueStr != null) {
+                    tooltipItems.push({
+                        displayName: col.displayName,
+                        value: valueStr
+                    });
+                }
+            });
+
             const identity = this.host.createSelectionIdBuilder()
                 .withTable(table, rowIndex)
                 .createSelectionId() as VisualSelectionId;
@@ -556,7 +939,8 @@ export class Visual implements IVisual {
                 division,
                 avatarUrl,
                 details,
-                metrics
+                metrics,
+                tooltipItems // NEW
             };
 
             nodes.push(datum);
@@ -813,6 +1197,24 @@ export class Visual implements IVisual {
             .classed("is-highlighted", (d) => !!d.payload.highlight)
             .classed("is-selected", (d) => this.selectedKeys.has(d.payload.identity.getKey()));
 
+        // NEW: wire up tooltips only when tooltips fields exist
+        if (this.hasTooltipFields) {
+            this.tooltipServiceWrapper.addTooltip(
+                merged as unknown as d3.Selection<Element, RenderNode, any, any>,
+                (d: RenderNode) => {
+                    const items = d.payload.tooltipItems;
+                    return items && items.length ? items : undefined; // returning undefined prevents empty tooltip
+                },
+                (d: RenderNode) => d.payload.identity
+            );
+        } else {
+            // Remove any previously attached tooltip handlers to avoid empty bubbles
+            (merged as unknown as d3.Selection<Element, RenderNode, any, any>)
+                .on("mousemove.tooltip", null)
+                .on("mouseover.tooltip", null)
+                .on("mouseout.tooltip", null);
+        }
+
         // DOUBLE rAF REVEAL — guarantees transforms/children are committed before first paint
         requestAnimationFrame(() => {
             requestAnimationFrame(() => {
@@ -980,14 +1382,35 @@ export class Visual implements IVisual {
 
     private handleNodeClick(event: MouseEvent, node: RenderNode): void {
         const multiSelect = event.ctrlKey || event.metaKey;
-        this.selectionManager.select(node.payload.identity, multiSelect)
-            .then((ids) => {
-                this.selectedKeys = new Set(ids.map((id) => (id as VisualSelectionId).getKey()));
-                this.updateSelectionVisuals();
-                if (ids.length > 0) this.highlightPath(node.payload.id);
-                else this.clearHighlights();
-            })
-            .catch(() => undefined);
+        const identityKey = node.payload.identity.getKey();
+        const isSelected = this.selectedKeys.has(identityKey);
+
+        if (multiSelect) {
+            if (isSelected) {
+                this.selectedKeys.delete(identityKey);
+            } else {
+                this.selectedKeys.add(identityKey);
+            }
+        } else {
+            this.selectedKeys.clear();
+            if (!isSelected) {
+                this.selectedKeys.add(identityKey);
+            }
+        }
+
+        this.updateSelectionVisuals();
+        if (this.selectedKeys.size > 0) {
+            this.highlightPath(node.payload.id);
+        } else {
+            this.clearHighlights();
+        }
+
+        // Defer the expensive Power BI selection call to avoid blocking the UI thread.
+        // This makes the visual's own highlighting feel instantaneous.
+        setTimeout(() => {
+            this.selectionManager.select(node.payload.identity, multiSelect).catch(() => undefined);
+        }, 0);
+
         event.preventDefault();
         event.stopPropagation();
     }
@@ -1053,20 +1476,21 @@ export class Visual implements IVisual {
         return value;
     }
 
-    private focusOnNode(nodeId: string): void {
-        if (!this.allowZoom) return;
-        const position = this.nodePositions.get(nodeId);
-        if (!position) return;
-        const width = Math.max(this.viewport.width, 1);
-        const height = Math.max(this.viewport.height, 1);
-        const nodeWidth = position.width + 120;
-        const nodeHeight = position.height + 120;
-        const scale = Math.min(Math.min(width / nodeWidth, height / nodeHeight), 2.5);
-        const translateX = width / 2 - position.absCenterX * scale;
-        const translateY = height / 2 - position.absCenterY * scale;
-        const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
-        this.svg.transition().duration(0).call(this.zoomBehavior.transform, transform);
-    }
+private focusOnNode(nodeId: string, scale: number = 1): void {
+    if (!this.allowZoom) return;
+    const position = this.nodePositions.get(nodeId);
+    if (!position) return;
+    const width = Math.max(this.viewport.width, 1);
+    const height = Math.max(this.viewport.height, 1);
+    const nodeWidth = position.width + 120;
+    const nodeHeight = position.height + 120;
+    // Use the provided scale, but clamp to a reasonable range
+    const finalScale = Math.max(0.1, Math.min(scale, 2.5));
+    const translateX = width / 2 - position.absCenterX * finalScale;
+    const translateY = height / 2 - position.absCenterY * finalScale;
+    const transform = d3.zoomIdentity.translate(translateX, translateY).scale(finalScale);
+    this.svg.transition().duration(0).call(this.zoomBehavior.transform, transform);
+}
 
     private fitToViewport(duration: number = 400): void {
         if (!this.allowZoom || !this.layoutBounds) return;
@@ -1143,8 +1567,11 @@ export class Visual implements IVisual {
 
     private getPathToRoot(nodeId: string): string[] {
         const path: string[] = [];
+        const visited = new Set<string>();
         let current = this.nodesById.get(nodeId);
         while (current && current.payload) {
+            if (visited.has(current.id)) break; // cycle detected
+            visited.add(current.id);
             path.push(current.id);
             const parentId = current.payload.parentId;
             current = parentId ? this.nodesById.get(parentId) : undefined;
@@ -1203,5 +1630,13 @@ export class Visual implements IVisual {
         const words = name.trim().split(/\s+/);
         if (words.length === 1) return words[0].charAt(0).toUpperCase();
         return (words[0].charAt(0) + words[words.length - 1].charAt(0)).toUpperCase();
+    }
+
+    // NEW: resolve initial expanded levels from formatting (0 => None)
+    private getInitialExpandedLevels(): number {
+        const val = this.formattingSettings?.layout?.initialExpandedLevels?.value?.value as string | undefined;
+        const parsed = val != null ? parseInt(val, 10) : NaN;
+        // default to 2 to preserve current behavior if unset/invalid
+        return Number.isNaN(parsed) ? 2 : parsed;
     }
 }

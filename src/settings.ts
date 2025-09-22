@@ -58,6 +58,21 @@ class LayoutCardSettings extends FormattingSettingsCard {
         value: 80
     });
 
+    initialExpandedLevels = new FormattingSettingsDropdown({
+        name: "initialExpandedLevels",
+        displayName: "Initial expanded levels",
+        value: { value: "2", displayName: "2" },
+        items: [
+            { value: "0", displayName: "None" },
+            { value: "1", displayName: "1" },
+            { value: "2", displayName: "2" },
+            { value: "3", displayName: "3" },
+            { value: "4", displayName: "4" },
+            { value: "5", displayName: "5" },
+            { value: "6", displayName: "6" }
+        ]
+    });
+
     enableZoom = new formattingSettings.ToggleSwitch({
         name: "enableZoom",
         displayName: "Enable zoom & pan",
@@ -77,6 +92,7 @@ class LayoutCardSettings extends FormattingSettingsCard {
         this.nodeHeight,
         this.horizontalSpacing,
         this.verticalSpacing,
+        this.initialExpandedLevels,
         this.enableZoom,
         this.showToolbar
     ];
