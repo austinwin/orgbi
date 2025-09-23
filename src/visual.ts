@@ -294,27 +294,6 @@ export class Visual implements IVisual {
         this.emptyState.textContent = "Add employee and manager fields to build the organisation chart.";
         this.canvas.appendChild(this.emptyState);
 
-        // ===== Footer =====
-        this.footer = document.createElement("div");
-        this.footer.className = "orgchart__footer";
-        // Securely build the footer content without innerHTML
-        this.footer.appendChild(document.createTextNode("A Custom PBI Visual - Made with "));
-        const heart = document.createElement("span");
-        heart.textContent = "♥";
-        heart.style.color = "red";
-        heart.style.fontSize = "1.2em";
-        this.footer.appendChild(heart);
-        this.footer.appendChild(document.createTextNode(" by WWO @ Groveway-2025"));
-        Object.assign(this.footer.style, {
-            position: "absolute",
-            bottom: "2px",
-            right: "12px",
-            fontSize: "10px",
-            color: "#94a3b8", // same as --org-link-color
-            zIndex: "10"
-        } as CSSStyleDeclaration);
-        this.root.appendChild(this.footer);
-
         this.buildToolbar();
         this.updateToolbarRailState();
         
@@ -572,7 +551,7 @@ export class Visual implements IVisual {
         this.viewport = options.viewport;
 
         const dataView: DataView | undefined = options.dataViews && options.dataViews[0];
-        this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(VisualFormattingSettingsModel, dataView);
+        this.formattingSettings = this.formattingSettingsService.populateFormattingSettingsModel(VisualFormattingSettingsModel, options.dataViews || []);
 
         this.applyFormatting();
 
@@ -625,6 +604,9 @@ export class Visual implements IVisual {
         // Toggle
         this.toolbarToggle = this.createToolbarRailButton("menu", "Show/Hide controls", () => {
             this.controlsVisible = !this.controlsVisible;
+            if (!this.controlsVisible && this.searchVisible) {
+                this.toggleSearch(false);
+            }            
             this.updateToolbarRailState();
         }, 24, 1);
         this.toolbarToggle.classList.add("orgchart__toolbar-btn--toggle");

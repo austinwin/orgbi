@@ -28,7 +28,7 @@
 
 import { formattingSettings } from "powerbi-visuals-utils-formattingmodel";
 
-import FormattingSettingsCard = formattingSettings.SimpleCard;
+import FormattingSettingsCard = formattingSettings.Card;
 import FormattingSettingsModel = formattingSettings.Model;
 import FormattingSettingsSlice = formattingSettings.Slice;
 import FormattingSettingsDropdown = formattingSettings.ItemDropdown;
