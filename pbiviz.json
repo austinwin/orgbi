@@ -4,18 +4,18 @@
     "displayName": "Org Chart",
     "guid": "orgChartA14B4AE4AC5F4BBF9EB7A7C7D12B5EF",
     "visualClassName": "Visual",
-    "version": "2.0.0.0",
+    "version": "2.0.0.1",
     "description": "Interactive organisation chart with rich cards, search and layout controls.",
     "supportUrl": "https://pbimap.com",
     "gitHubUrl": "https://github.com/pbimap/orgchart"
   },
   "apiVersion": "5.10.0",
-  "author": { "name": "PBIMap Team", "email": "pbimap@outlook.com" },
+  "author": { "name": "Hoang Nguyen", "email": "pbimap@outlook.com" },
   "assets": { "icon": "assets/icon.png" },
   "externalJS": null,
   "style": "style/visual.less",
   "capabilities": "capabilities.json",
   "dependencies": null,
   "stringResources": [],
-  "version": "2.0.0.0"
+  "version": "2.0.0.1"
 }

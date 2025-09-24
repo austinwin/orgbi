@@ -289,6 +289,9 @@ export class Visual implements IVisual {
             }
         });
 
+        // NEW: background context menu anywhere on the chart (except nodes/UI controls)
+        this.initBackgroundContextMenu();
+
         this.emptyState = document.createElement("div");
         this.emptyState.className = "orgchart__empty";
         this.emptyState.textContent = "Add employee and manager fields to build the organisation chart.";
@@ -562,7 +565,69 @@ export class Visual implements IVisual {
             // clear scene and show empty state
             this.linksGroup.selectAll("path").remove();
             this.nodesGroup.selectAll("g").remove();
-            if (this.emptyState) this.emptyState.style.display = "flex";
+            if (this.emptyState) {
+                this.emptyState.style.display = "flex";
+                // NEW: Provide more helpful hints
+                const hintHtml = `
+                    <div style="text-align: center; font-size: 14px; color: #333; line-height: 1.6;">
+                        <strong style="font-size: 16px; display: block; margin-bottom: 12px;">Build your org chart</strong>
+                        To get started, add data to the following fields:<br>
+                        <ul style="text-align: left; display: inline-block; margin-top: 10px; padding-left: 20px;">
+                            <li><strong>Employee ID</strong> (Required)</li>
+                            <li><strong>Manager ID</strong> (Required)</li>
+                            <li><strong>Display Name</strong></li>
+                        </ul>
+                    </div>
+                `;
+                // Securely build the hint content without using innerHTML
+                while (this.emptyState.firstChild) this.emptyState.removeChild(this.emptyState.firstChild);
+
+                const container = document.createElement("div");
+                container.style.textAlign = "center";
+                container.style.fontSize = "14px";
+                container.style.color = "#333";
+                container.style.lineHeight = "1.6";
+
+                const strong = document.createElement("strong");
+                strong.style.fontSize = "16px";
+                strong.style.display = "block";
+                strong.style.marginBottom = "12px";
+                strong.textContent = "Build your org chart";
+                container.appendChild(strong);
+
+                const text = document.createElement("span");
+                text.textContent = "To get started, add data to the following fields:";
+                container.appendChild(text);
+
+                const ul = document.createElement("ul");
+                ul.style.textAlign = "left";
+                ul.style.display = "inline-block";
+                ul.style.marginTop = "10px";
+                ul.style.paddingLeft = "20px";
+
+                const li1 = document.createElement("li");
+                const strong1 = document.createElement("strong");
+                strong1.textContent = "Employee ID";
+                li1.appendChild(strong1);
+                li1.appendChild(document.createTextNode(" (Required)"));
+                ul.appendChild(li1);
+
+                const li2 = document.createElement("li");
+                const strong2 = document.createElement("strong");
+                strong2.textContent = "Manager ID";
+                li2.appendChild(strong2);
+                li2.appendChild(document.createTextNode(" (Required)"));
+                ul.appendChild(li2);
+
+                const li3 = document.createElement("li");
+                const strong3 = document.createElement("strong");
+                strong3.textContent = "Display Name";
+                li3.appendChild(strong3);
+                ul.appendChild(li3);
+
+                container.appendChild(ul);
+                this.emptyState.appendChild(container);
+            }
             // reset the initial-fit flag so we will fit when data becomes complete
             this.didInitialFit = false;
             return;
@@ -1094,7 +1159,16 @@ export class Visual implements IVisual {
             .attr("transform", (d) => `translate(${d.x}, ${d.y})`)
             // hard kill any intermediate paint
             .style("display", "none")
-            .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d));
+            .on("click", (event, d) => this.handleNodeClick(event as MouseEvent, d))
+            // NEW: Add context menu handler
+            .on("contextmenu", (event, d) => {
+                event.preventDefault();
+                event.stopPropagation();
+                this.selectionManager.showContextMenu(d.payload.identity, {
+                    x: event.clientX,
+                    y: event.clientY
+                });
+            });
         // seed new nodes at parent connector
         nodeEnter.attr("transform", (d) => {
             const parentId = d.node.parent?.data.payload?.id;
@@ -1620,5 +1694,31 @@ private focusOnNode(nodeId: string, scale: number = 1): void {
         const parsed = val != null ? parseInt(val, 10) : NaN;
         // default to 2 to preserve current behavior if unset/invalid
         return Number.isNaN(parsed) ? 2 : parsed;
+    }
+
+    // NEW: Attach a background context menu to the canvas so right-click works on links/empty space.
+    private initBackgroundContextMenu(): void {
+        const handler = (e: MouseEvent) => {
+            const target = e.target as Element | null;
+
+            // Let node-specific handler take over
+            if (target?.closest?.("g.orgchart__node")) return;
+
+            // Do not hijack UI controls (toolbar/search/input fields)
+            if (target?.closest?.(".orgchart__toolbar, .orgchart__search-container, input, textarea"))
+                return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            // Show the visual-level context menu (no specific data point)
+            this.selectionManager.showContextMenu((null as unknown) as VisualSelectionId, {
+                x: e.clientX,
+                y: e.clientY
+            });
+        };
+
+        // Attach to canvas to cover both SVG background, links and empty-state overlay
+        this.canvas.addEventListener("contextmenu", handler);
     }
 }
