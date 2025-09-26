@@ -213,6 +213,7 @@
             ]
         }
     ],
+    "supportsLandingPage": true,
     "supportsHighlight": true,
     "sorting": {
         "default": {}
