@@ -164,6 +164,8 @@ export class Visual implements IVisual {
     private emptyState: HTMLDivElement;
     private footer: HTMLDivElement;
 
+    private landingWarnings: string[] = [];
+
     // init flags
     private didInitialAutoCollapse = false;
     private didInitialFit = false;
@@ -294,8 +296,8 @@ export class Visual implements IVisual {
 
         this.emptyState = document.createElement("div");
         this.emptyState.className = "orgchart__empty";
-        this.emptyState.textContent = "Add employee and manager fields to build the organisation chart.";
         this.canvas.appendChild(this.emptyState);
+        this.renderLandingPage();
 
         this.buildToolbar();
         this.updateToolbarRailState();
@@ -561,73 +563,12 @@ export class Visual implements IVisual {
         const transformResult = this.transform(dataView);
         this.fullTree = transformResult.tree;
         this.nodesById = transformResult.nodesById;
+        this.landingWarnings = transformResult.warnings || [];
         if (!this.fullTree) {
             // clear scene and show empty state
             this.linksGroup.selectAll("path").remove();
             this.nodesGroup.selectAll("g").remove();
-            if (this.emptyState) {
-                this.emptyState.style.display = "flex";
-                // NEW: Provide more helpful hints
-                const hintHtml = `
-                    <div style="text-align: center; font-size: 14px; color: #333; line-height: 1.6;">
-                        <strong style="font-size: 16px; display: block; margin-bottom: 12px;">Build your org chart</strong>
-                        To get started, add data to the following fields:<br>
-                        <ul style="text-align: left; display: inline-block; margin-top: 10px; padding-left: 20px;">
-                            <li><strong>Employee ID</strong> (Required)</li>
-                            <li><strong>Manager ID</strong> (Required)</li>
-                            <li><strong>Display Name</strong></li>
-                        </ul>
-                    </div>
-                `;
-                // Securely build the hint content without using innerHTML
-                while (this.emptyState.firstChild) this.emptyState.removeChild(this.emptyState.firstChild);
-
-                const container = document.createElement("div");
-                container.style.textAlign = "center";
-                container.style.fontSize = "14px";
-                container.style.color = "#333";
-                container.style.lineHeight = "1.6";
-
-                const strong = document.createElement("strong");
-                strong.style.fontSize = "16px";
-                strong.style.display = "block";
-                strong.style.marginBottom = "12px";
-                strong.textContent = "Build your org chart";
-                container.appendChild(strong);
-
-                const text = document.createElement("span");
-                text.textContent = "To get started, add data to the following fields:";
-                container.appendChild(text);
-
-                const ul = document.createElement("ul");
-                ul.style.textAlign = "left";
-                ul.style.display = "inline-block";
-                ul.style.marginTop = "10px";
-                ul.style.paddingLeft = "20px";
-
-                const li1 = document.createElement("li");
-                const strong1 = document.createElement("strong");
-                strong1.textContent = "Employee ID";
-                li1.appendChild(strong1);
-                li1.appendChild(document.createTextNode(" (Required)"));
-                ul.appendChild(li1);
-
-                const li2 = document.createElement("li");
-                const strong2 = document.createElement("strong");
-                strong2.textContent = "Manager ID";
-                li2.appendChild(strong2);
-                li2.appendChild(document.createTextNode(" (Required)"));
-                ul.appendChild(li2);
-
-                const li3 = document.createElement("li");
-                const strong3 = document.createElement("strong");
-                strong3.textContent = "Display Name";
-                li3.appendChild(strong3);
-                ul.appendChild(li3);
-
-                container.appendChild(ul);
-                this.emptyState.appendChild(container);
-            }
+            this.renderLandingPage(this.landingWarnings);
             // reset the initial-fit flag so we will fit when data becomes complete
             this.didInitialFit = false;
             return;
@@ -1058,13 +999,14 @@ export class Visual implements IVisual {
         this.svg.attr("height", this.viewport.height);
 
         const visibleTree = this.buildVisibleTree();
-        const hasData = visibleTree && visibleTree.children.length > 0;
-        this.emptyState.style.display = hasData ? "none" : "flex";
+        const hasData = !!(visibleTree && visibleTree.children.length > 0);
         if (!hasData) {
+            this.renderLandingPage(this.landingWarnings);
             this.linksGroup.selectAll("path").remove();
             this.nodesGroup.selectAll("g").remove();
             return;
         }
+        if (this.emptyState) this.emptyState.style.display = "none";
 
         const root = d3.hierarchy<ChartNode>(visibleTree!, (node) => node.children);
         const treeLayout = d3.tree<ChartNode>()
@@ -1420,6 +1362,85 @@ export class Visual implements IVisual {
         });
     }
 
+    private renderLandingPage(warnings: string[] = []): void {
+        if (!this.emptyState) return;
+
+        const missingEmployee = warnings.some((warning) => /employee id/i.test(warning));
+        const missingManager = warnings.some((warning) => /manager id/i.test(warning));
+        const noRows = warnings.some((warning) => /no valid rows/i.test(warning));
+        const noData = warnings.some((warning) => /no data/i.test(warning));
+
+        let message = "Add your data fields to start visualising relationships.";
+        if (missingEmployee || missingManager) {
+            message = "Link the required fields so we know who reports to whom.";
+        } else if (noRows) {
+            message = "Add at least one row of data to draw the organisation chart.";
+        } else if (noData) {
+            message = "Connect the Employee and Manager fields to begin.";
+        }
+
+        const fields: Array<{ label: string; required: boolean; missing: boolean }> = [
+            { label: "Employee ID", required: true, missing: missingEmployee },
+            { label: "Manager ID", required: true, missing: missingManager },
+            { label: "Display Name", required: false, missing: false }
+        ];
+
+        this.emptyState.style.display = "flex";
+        while (this.emptyState.firstChild) this.emptyState.removeChild(this.emptyState.firstChild);
+
+        const card = document.createElement("div");
+        card.className = "orgchart__empty-card";
+        this.emptyState.appendChild(card);
+
+        const title = document.createElement("h2");
+        title.className = "orgchart__empty-title";
+        title.textContent = "Build your org chart";
+        card.appendChild(title);
+
+        const description = document.createElement("p");
+        description.className = "orgchart__empty-text";
+        description.textContent = message;
+        card.appendChild(description);
+
+        const subtitle = document.createElement("div");
+        subtitle.className = "orgchart__empty-subtitle";
+        subtitle.textContent = "Required fields";
+        card.appendChild(subtitle);
+
+        const list = document.createElement("ul");
+        list.className = "orgchart__empty-fields";
+        card.appendChild(list);
+
+        fields.forEach((field) => {
+            const item = document.createElement("li");
+            item.className = "orgchart__empty-field";
+            if (field.required) item.classList.add("is-required");
+            if (field.missing) item.classList.add("is-missing");
+
+            const label = document.createElement("span");
+            label.className = "orgchart__empty-field-label";
+            label.textContent = field.label;
+            item.appendChild(label);
+
+            const pill = document.createElement("span");
+            pill.className = "orgchart__empty-field-pill";
+            pill.textContent = field.required ? "Required" : "Optional";
+            item.appendChild(pill);
+
+            list.appendChild(item);
+        });
+
+        const footnote = document.createElement("div");
+        footnote.className = "orgchart__empty-footnote";
+        if (noRows) {
+            footnote.textContent = "Tip: make sure your dataset includes at least one person with a mapped manager.";
+        } else if (missingEmployee || missingManager) {
+            footnote.textContent = "Employee ID and Manager ID define the hierarchy and must be present.";
+        } else {
+            footnote.textContent = "Once the required fields are mapped, the org chart will render automatically.";
+        }
+        card.appendChild(footnote);
+    }
     private linkPath(link: RenderLink): string {
         const s = link.source, t = link.target;
         if (this.orientation === "vertical") {
@@ -1722,3 +1743,9 @@ private focusOnNode(nodeId: string, scale: number = 1): void {
         this.canvas.addEventListener("contextmenu", handler);
     }
 }
+
+
+
+
+
+
