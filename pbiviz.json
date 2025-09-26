@@ -10,7 +10,7 @@
     "gitHubUrl": "https://github.com/pbimap/orgchart"
   },
   "apiVersion": "5.10.0",
-  "author": { "name": "Hoang Nguyen", "email": "pbimap@outlook.com" },
+  "author": { "name": "aaa", "email": "pbimap@outlook.com" },
   "assets": { "icon": "assets/icon.png" },
   "externalJS": null,
   "style": "style/visual.less",
