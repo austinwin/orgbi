@@ -1269,47 +1269,67 @@ export class Visual implements IVisual {
             }
 
             // details – exclude title/division here (we already show them as separate lines)
-            const detailNode = detailsEl.node();
-            if (detailNode) {
-                while (detailNode.firstChild) detailNode.removeChild(detailNode.firstChild);
-                payload.details.forEach((item) => {
-                    if (!item.value) return;
-                    const line = detailNode.ownerDocument!.createElement("div");
-                    line.className = "orgcard__detail-line";
-                    if (item.label) {
-                        const label = detailNode.ownerDocument!.createElement("span");
-                        label.className = "orgcard__detail-label";
-                        label.textContent = item.label;
-                        line.appendChild(label);
-                    }
-                    const value = detailNode.ownerDocument!.createElement("span");
-                    value.className = "orgcard__detail-value";
-                    value.textContent = item.value;
-                    line.appendChild(value);
-                    detailNode.appendChild(line);
-                });
-            }
+// details – exclude title/division here (we already show them as separate lines)
+// details – exclude title/division here (we already show them as separate lines)
+const detailNode = detailsEl.node();
+if (detailNode) {
+    while (detailNode.firstChild) detailNode.removeChild(detailNode.firstChild);
+    payload.details.forEach((item) => {
+        const val = item.value?.trim();
+        if (!val) return;
+        const line = detailNode.ownerDocument!.createElement("div");
+        line.className = "orgcard__detail-line";
 
-            const metricNode = metricsEl.node();
-            if (metricNode) {
-                while (metricNode.firstChild) metricNode.removeChild(metricNode.firstChild);
-                payload.metrics.forEach((metric) => {
-                    if (!metric.value) return;
-                    const badge = metricNode.ownerDocument!.createElement("div");
-                    badge.className = "orgcard__metric";
-                    if (metric.label) {
-                        const label = metricNode.ownerDocument!.createElement("span");
-                        label.className = "orgcard__metric-label";
-                        label.textContent = metric.label;
-                        badge.appendChild(label);
-                    }
-                    const value = metricNode.ownerDocument!.createElement("span");
-                    value.className = "orgcard__metric-value";
-                    value.textContent = metric.value;
-                    badge.appendChild(value);
-                    metricNode.appendChild(badge);
-                });
-            }
+        if (item.label) {
+            const label = detailNode.ownerDocument!.createElement("span");
+            label.className = "orgcard__detail-label";
+            label.textContent = item.label;
+            line.appendChild(label);
+        }
+
+        const value = detailNode.ownerDocument!.createElement("span");
+        value.className = "orgcard__detail-value";
+        value.textContent = val;
+        line.appendChild(value);
+        detailNode.appendChild(line);
+    });
+
+    // Keep container but dim if empty
+    detailsEl.style("visibility", detailNode.childNodes.length > 0 ? "visible" : "hidden");
+    detailsEl.style("height", detailNode.childNodes.length > 0 ? "auto" : "0");
+}
+
+// metrics
+const metricNode = metricsEl.node();
+if (metricNode) {
+    while (metricNode.firstChild) metricNode.removeChild(metricNode.firstChild);
+payload.metrics.forEach((metric) => {
+    const val = (metric.value ?? "").toString().trim();
+    if (!val) return; // skip empty or undefined metrics
+
+    const badge = metricNode.ownerDocument!.createElement("div");
+    badge.className = "orgcard__metric";
+
+    const labelText = (metric.label ?? "").toString().trim();
+    if (labelText) {
+        const label = metricNode.ownerDocument!.createElement("span");
+        label.className = "orgcard__metric-label";
+        label.textContent = labelText;
+        badge.appendChild(label);
+    }
+
+    const value = metricNode.ownerDocument!.createElement("span");
+    value.className = "orgcard__metric-value";
+    value.textContent = val;
+    badge.appendChild(value);
+    metricNode.appendChild(badge);
+});
+
+
+    // Keep container but collapse space when empty
+    metricsEl.style("visibility", metricNode.childNodes.length > 0 ? "visible" : "hidden");
+    metricsEl.style("height", metricNode.childNodes.length > 0 ? "auto" : "0");
+}
         });
     }
 
@@ -1394,7 +1414,7 @@ export class Visual implements IVisual {
 
         const title = document.createElement("h2");
         title.className = "orgchart__empty-title";
-        title.textContent = "Build your org chart";
+        title.textContent = "Org chart - by H. Nguyen WWO";
         card.appendChild(title);
 
         const description = document.createElement("p");
@@ -1743,9 +1763,3 @@ private focusOnNode(nodeId: string, scale: number = 1): void {
         this.canvas.addEventListener("contextmenu", handler);
     }
 }
-
-
-
-
-
-
